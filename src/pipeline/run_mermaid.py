@@ -1,7 +1,14 @@
 """
-Step 2 — Run MERMaid extraction on one paper.
+Figure/Table Extraction — run MERMaid (VisualHeist + DataRaider) on one paper.
 
 Delegates to the MERMaid adapter (mock or real) and saves the raw output.
+Accepts an optional *documents* dict from the Shared Input Layer so that
+pdfplumber text extraction is not duplicated.
+
+Architecture position
+---------------------
+Shared Input Layer → Figure/Table Extraction [MERMaid VisualHeist]
+                  → Branch C figure outputs
 """
 
 from pathlib import Path
@@ -15,7 +22,11 @@ from src.utils.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
-def run_mermaid(paper: Paper, output_dir: Optional[Path] = None) -> dict:
+def run_mermaid(
+    paper: Paper,
+    output_dir: Optional[Path] = None,
+    documents: Optional[dict] = None,
+) -> dict:
     """
     Run MERMaid on *paper* and return the extraction result dict.
 
@@ -24,6 +35,9 @@ def run_mermaid(paper: Paper, output_dir: Optional[Path] = None) -> dict:
     paper      : A registered Paper object.
     output_dir : Where to write the raw MERMaid output JSON.
                  Defaults to settings.MERMAID_OUTPUT_DIR.
+    documents  : Optional output of load_documents() from the Shared Input Layer.
+                 When provided, text_blocks/si_blocks are taken from here so
+                 pdfplumber is not run a second time.
 
     Returns
     -------
@@ -37,6 +51,7 @@ def run_mermaid(paper: Paper, output_dir: Optional[Path] = None) -> dict:
         pdf_path   = paper.pdf_path,
         si_path    = paper.si_path,
         output_dir = output_dir,
+        documents  = documents,
     )
     logger.info(
         f"MERMaid done for {paper.paper_id}: "

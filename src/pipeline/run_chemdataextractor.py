@@ -1,7 +1,18 @@
 """
-Step 3 — Run ChemDataExtractor (CDE) on the paper's main text and SI text.
+CDE Runner — run ChemDataExtractor on the paper's main text and SI text.
 
-Delegates to the CDE adapter (mock or real).
+CDE is now parallel to MERMaid (not downstream). It receives text_blocks
+directly from the Shared Input Layer via the *documents* parameter, rather
+than from the MERMaid branch output.
+
+This function is called by run_text_organisation.py (Branch A) and
+run_identifier_dictionary.py (Branch B). It can still be called standalone
+for backward compatibility.
+
+Architecture position
+---------------------
+Shared Input Layer → Branch A: Text Organisation [CDE primary + Agent AI]
+                  → Branch B: Identifier Dictionary [CDE candidates + Agent AI]
 """
 
 from pathlib import Path
@@ -15,40 +26,51 @@ from src.utils.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
-def run_chemdataextractor(paper: Paper, mermaid_output: dict = None) -> dict:
+def run_chemdataextractor(
+    paper: Paper,
+    documents: Optional[dict] = None,
+    mermaid_output: Optional[dict] = None,
+) -> dict:
     """
-    Run ChemDataExtractor (CDE text branch) on *paper* (main text + SI).
+    Run ChemDataExtractor (CDE) on *paper* (main text + SI).
+
+    CDE is now parallel to MERMaid. Text blocks come from the Shared Input Layer
+    via *documents*, not from the MERMaid branch.
 
     Parameters
     ----------
     paper          : A registered Paper object.
-    mermaid_output : Optional output dict from run_mermaid() (MERMaid branch).
-                     When provided, ``text_blocks`` and ``si_blocks`` extracted
-                     by MERMaid are passed directly to the CDE adapter so it
-                     can parse them without re-reading from disk.
+    documents      : Optional output of load_documents() from the Shared Input Layer.
+                     When provided, text_blocks and si_blocks are passed directly to
+                     the CDE adapter. Takes priority over mermaid_output.
+    mermaid_output : Kept for backward compatibility. Used only when *documents* is
+                     not provided. Will be removed in a future version.
 
     Returns
     -------
     dict with keys:
         paper_id, chemical_mentions, condition_mentions,
         procedure_blocks, text_chunks
-    The SI results are merged into the same structure with a "_si" suffix
+    The SI results are merged into the same structure with a "_si" prefix
     on chunk_ids so they can be distinguished downstream.
     """
     logger.info(f"Running ChemDataExtractor on paper {paper.paper_id}")
 
-    # Extract text_blocks and si_blocks from the MERMaid branch output when
-    # available so the CDE adapter can use them directly instead of re-loading
-    # from disk.
+    # Resolve text_blocks source: prefer Shared Input Layer documents.
     text_blocks: Optional[list] = None
-    si_blocks: Optional[list] = None
-    if mermaid_output is not None:
-        text_blocks = mermaid_output.get("text_blocks")
-        si_blocks   = mermaid_output.get("si_blocks")
+    si_blocks:   Optional[list] = None
+
+    if documents is not None:
+        text_blocks = documents.get("text_blocks") or None
+        si_blocks   = documents.get("si_blocks") or None
+    elif mermaid_output is not None:
+        # Backward-compatible fallback.
+        text_blocks = mermaid_output.get("text_blocks") or None
+        si_blocks   = mermaid_output.get("si_blocks") or None
 
     main_result = parse_main_text(
         paper_id    = paper.paper_id,
-        text_path   = paper.pdf_path,   # In real mode, pass extracted plain text here
+        text_path   = paper.pdf_path,
         text_blocks = text_blocks,
     )
 

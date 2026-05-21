@@ -17,8 +17,10 @@ Step 2  DataRaider sends each PNG to GPT-4o, which reads the image and fills
         (Donor, Acceptor, Promoter, Solvent, Temperature, Time, Yield, …).
         JSON files are saved to data/mermaid_outputs/<paper_id>_dataraider/.
 
-Step 3  pdfplumber extracts plain text blocks and SI blocks from the PDFs so
-        downstream steps can search captions, procedures, and paragraphs.
+Step 3  text_blocks and si_blocks are now provided by the Shared Input Layer
+        (load_documents.py) via the optional *documents* parameter, so that
+        pdfplumber extraction is performed exactly once per run.  If *documents*
+        is not provided, text_blocks / si_blocks default to empty lists.
 
 Step 4  Everything is combined into our unified internal format and returned.
 """
@@ -59,6 +61,7 @@ def run_mermaid_on_paper(
     pdf_path: str,
     si_path: Optional[str] = None,
     output_dir: Optional[Path] = None,
+    documents: Optional[dict] = None,
 ) -> dict:
     """
     Run MERMaid on a single paper and return its extraction output as a dict.
@@ -69,6 +72,9 @@ def run_mermaid_on_paper(
     pdf_path  : Path to the main paper PDF.
     si_path   : Optional path to the supplementary information PDF.
     output_dir: Directory for MERMaid outputs (defaults to settings.MERMAID_OUTPUT_DIR).
+    documents : Optional output of load_documents() from the Shared Input Layer.
+                When provided, text_blocks and si_blocks are taken from here
+                instead of being extracted again by pdfplumber.
 
     Returns
     -------
@@ -80,7 +86,7 @@ def run_mermaid_on_paper(
     if settings.PIPELINE_MODE == "mock":
         return _run_mock(paper_id, output_dir)
     else:
-        return _run_real(paper_id, pdf_path, si_path, output_dir)
+        return _run_real(paper_id, pdf_path, si_path, output_dir, documents=documents)
 
 
 def load_mermaid_result(result_path: Path) -> dict:
@@ -109,14 +115,16 @@ def _run_real(
     pdf_path: str,
     si_path: Optional[str],
     output_dir: Path,
+    documents: Optional[dict] = None,
 ) -> dict:
     """
-    Full MERMaid pipeline using VisualHeist + DataRaider + pdfplumber.
+    Full MERMaid pipeline using VisualHeist + DataRaider.
 
     1. VisualHeist extracts every figure/table from the PDF as PNG images.
     2. DataRaider (GPT-4o) reads those images and produces structured JSON
        with glycosylation-specific fields.
-    3. pdfplumber extracts plain-text paragraphs and SI blocks.
+    3. text_blocks and si_blocks come from the Shared Input Layer (documents).
+       If not provided, they default to empty lists.
     4. Everything is combined into our internal format and saved to disk.
     """
     if not settings.OPENAI_API_KEY:
@@ -143,12 +151,25 @@ def _run_real(
     tables = _run_dataraider(paper_id, image_dir, json_dir, prompt_dir)
     logger.info(f"DataRaider extracted {len(tables)} reaction table(s) from {paper_id}")
 
-    # ── Step 3: Text extraction via pdfplumber ────────────────────────────────
-    text_blocks = _extract_text_blocks(pdf_path, paper_id, prefix="BLK")
-    si_blocks   = _extract_text_blocks(si_path,  paper_id, prefix="SI_BLK") if si_path else []
-    logger.info(
-        f"pdfplumber: {len(text_blocks)} text block(s), {len(si_blocks)} SI block(s)"
-    )
+    # ── Step 3: Use text_blocks from the Shared Input Layer ───────────────────
+    # The Shared Input Layer (load_documents.py) extracted pdfplumber blocks
+    # once already. Reuse them here to avoid double-extraction.
+    if documents is not None:
+        text_blocks = documents.get("text_blocks", [])
+        si_blocks   = documents.get("si_blocks", [])
+        logger.info(
+            f"Using shared input layer text blocks: "
+            f"{len(text_blocks)} main, {len(si_blocks)} SI"
+        )
+    else:
+        # Fallback: no documents provided — default to empty.
+        text_blocks = []
+        si_blocks   = []
+        logger.warning(
+            f"No documents dict provided to _run_real for {paper_id}; "
+            f"text_blocks will be empty. Pass documents=load_documents(paper) "
+            f"from the shared input layer."
+        )
 
     # ── Step 4: Assemble and save ─────────────────────────────────────────────
     result = {
@@ -303,53 +324,6 @@ def _install_glyco_filter_prompt(glyco_filter: Path, prompt_dir: Path) -> None:
         shutil.copy(dest, backup)
     shutil.copy(glyco_filter, dest)
     logger.debug(f"Installed glyco filter prompt → {dest}")
-
-
-# ── Step 3 helper: pdfplumber text extraction ─────────────────────────────────
-
-def _extract_text_blocks(
-    pdf_path: Optional[str],
-    paper_id: str,
-    prefix: str = "BLK",
-    min_chars: int = 80,
-) -> list:
-    """
-    Extract paragraph-level text blocks from a PDF using pdfplumber.
-
-    Each page is split on double-newlines to approximate paragraph boundaries.
-    Short fragments (< min_chars) are dropped as noise.
-
-    Returns a list of text_block dicts matching our Chunk format.
-    """
-    if not pdf_path or not Path(pdf_path).exists():
-        logger.warning(f"PDF not found for text extraction: {pdf_path}")
-        return []
-
-    import pdfplumber
-
-    blocks = []
-    block_idx = 0
-
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages, start=1):
-                raw_text = page.extract_text() or ""
-                # Split on blank lines to approximate paragraphs.
-                paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
-                for para in paragraphs:
-                    if len(para) < min_chars:
-                        continue
-                    blocks.append({
-                        "block_id":    f"{prefix}_{block_idx:04d}",
-                        "page":        page_num,
-                        "text":        para,
-                        "section":     None,   # section detection not implemented yet
-                    })
-                    block_idx += 1
-    except Exception as exc:
-        logger.error(f"pdfplumber failed on {pdf_path}: {exc}")
-
-    return blocks
 
 
 # ── Parsing helpers ───────────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ class ReactionRecord:
     title:     str = ""
     doi:       str = ""
     figure_id: str = ""
+    phase:     str = "unknown"   # "solution" | "solid" | "unknown" (Phase Classification)
 
     # Core reaction participants
     donor_id:       str = "NR"
@@ -83,6 +84,7 @@ class ReactionRecord:
             "title":                      self.title,
             "doi":                        self.doi,
             "figure_id":                  self.figure_id,
+            "phase":                      self.phase,
             "donor_id":                   self.donor_id,
             "donor_name":                 self.donor_name,
             "acceptor_id":                self.acceptor_id,
