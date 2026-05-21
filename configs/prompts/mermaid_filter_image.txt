@@ -1,0 +1,9 @@
+I will provide a figure or table from a scientific chemistry paper.
+Does the figure or table contain information about a glycosylation reaction?
+This includes:
+- Reaction optimization tables showing donors, acceptors, promoters, solvents, temperatures, yields, or stereoselectivity
+- Synthesis schemes showing glycosylation reactions with donors, acceptors, and products labelled
+- Tables summarising glycosylation scope (substrate scope tables)
+
+Be on the cautious side and put true for images you are not confident about.
+Output your answer as JSON with the key "is_optimization_table" and a boolean value.

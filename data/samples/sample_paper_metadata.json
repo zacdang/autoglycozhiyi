@@ -1,0 +1,18 @@
+[
+  {
+    "paper_id": "PAPER_001",
+    "title": "Stereoselective Synthesis of 2-Deoxyglycosides via Thioglycoside Donors",
+    "doi": "10.1021/jacs.2023.00001",
+    "year": 2023,
+    "pdf_path": "data/raw/papers/paper_001.pdf",
+    "si_path": "data/raw/si/paper_001_si.pdf"
+  },
+  {
+    "paper_id": "SIANTURI_2024",
+    "title": "Klebsiella pneumoniae Glycoconjugate Vaccine Leads Based on Semi-Synthetic O1 and O2ac Antigens",
+    "doi": "10.1002/anie.202419516",
+    "year": 2025,
+    "pdf_path": "data/raw/papers/sianturi_2024.pdf",
+    "si_path": null
+  }
+]

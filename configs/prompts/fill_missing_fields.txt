@@ -1,0 +1,22 @@
+You are a glycochemistry expert. A glycosylation reaction record has the following
+missing or unknown fields:
+
+Missing fields: {missing_fields}
+
+Here are the most relevant text chunks retrieved from the paper and supplementary
+information that may contain the answers:
+
+{supporting_chunks}
+
+For each missing field, extract the value if present. If a value is genuinely not
+reported, use the string "NR".
+
+Return a JSON object where keys are the field names and values are the extracted strings.
+Example:
+{
+  "solvent": "CH2Cl2",
+  "temperature": "-20 °C",
+  "yield": "NR"
+}
+
+Do not include any other text.

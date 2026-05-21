@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GlycoReactionRecord",
+  "description": "Structured record for a single glycosylation reaction extracted from a scientific paper.",
+  "type": "object",
+  "required": [
+    "paper_id", "figure_id", "donor_id", "acceptor_id", "product_id",
+    "completeness_score"
+  ],
+  "properties": {
+    "paper_id":              { "type": "string",  "description": "Unique ID of the source paper." },
+    "title":                 { "type": "string",  "description": "Paper title." },
+    "doi":                   { "type": "string",  "description": "DOI of the paper." },
+    "figure_id":             { "type": "string",  "description": "ID of the figure/scheme from which the reaction was extracted." },
+    "donor_id":              { "type": "string",  "description": "Alphanumeric identifier of the glycosyl donor (e.g. '3a')." },
+    "donor_name":            { "type": "string",  "description": "Chemical name or SMILES of the donor, if resolved." },
+    "acceptor_id":           { "type": "string",  "description": "Alphanumeric identifier of the glycosyl acceptor." },
+    "acceptor_name":         { "type": "string",  "description": "Chemical name or SMILES of the acceptor, if resolved." },
+    "product_id":            { "type": "string",  "description": "Alphanumeric identifier of the glycosylation product." },
+    "product_name":          { "type": "string",  "description": "Chemical name or SMILES of the product, if resolved." },
+    "promoter":              { "type": "string",  "description": "Promoter reagent used (e.g. 'NIS/TfOH'). NR = not reported." },
+    "solvent":               { "type": "string",  "description": "Reaction solvent(s). NR = not reported." },
+    "temperature":           { "type": "string",  "description": "Reaction temperature (e.g. '-20 °C'). NR = not reported." },
+    "time":                  { "type": "string",  "description": "Reaction time (e.g. '2 h'). NR = not reported." },
+    "yield":                 { "type": "string",  "description": "Reported yield (e.g. '78%'). NR = not reported." },
+    "stereochemistry":       { "type": "string",  "description": "Anomeric outcome (e.g. 'alpha', 'beta', 'alpha/beta 1:3'). NR = not reported." },
+    "glycan_or_substrate_notes": { "type": "string", "description": "Free-text notes about the glycan type or substrate." },
+    "procedure_reference":   { "type": "string",  "description": "Reference to the experimental procedure (e.g. 'Procedure B', 'see SI Section 3')." },
+    "supporting_chunks":     {
+      "type": "array",
+      "description": "Text chunks used to populate or verify fields.",
+      "items": { "type": "string" }
+    },
+    "provenance":            {
+      "type": "object",
+      "description": "Maps each field name to the source chunk/location it was extracted from.",
+      "additionalProperties": { "type": "string" }
+    },
+    "completeness_score":    {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Fraction of non-NR fields out of all tracked fields."
+    },
+    "unresolved_fields":     {
+      "type": "array",
+      "description": "List of field names that remain NR after all filling steps.",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "paper_id": "PAPER_001",
+  "source_pdf": "data/raw/papers/paper_001.pdf",
+  "figures": [
+    {
+      "figure_id": "FIG_01",
+      "page": 3,
+      "caption": "Scheme 1. Stereoselective glycosylation of donor 3a with acceptor 5b using NIS/TfOH promoter system.",
+      "image_path": "data/mermaid_outputs/PAPER_001_FIG_01.png",
+      "text_labels": ["3a", "5b", "6c", "NIS/TfOH", "CH2Cl2", "-20 °C", "78%", "β"],
+      "bounding_box": [120, 340, 900, 620]
+    },
+    {
+      "figure_id": "FIG_02",
+      "page": 5,
+      "caption": "Figure 2. HPLC analysis of crude reaction mixture showing product distribution.",
+      "image_path": "data/mermaid_outputs/PAPER_001_FIG_02.png",
+      "text_labels": ["retention time (min)", "absorbance"],
+      "bounding_box": [100, 200, 850, 550]
+    }
+  ],
+  "tables": [
+    {
+      "table_id": "TABLE_01",
+      "page": 4,
+      "caption": "Table 1. Optimization of glycosylation conditions for donor 3a.",
+      "headers": ["Entry", "Donor", "Acceptor", "Promoter", "Solvent", "Temp (°C)", "Time (h)", "Yield (%)", "α/β"],
+      "rows": [
+        ["1", "3a", "5b", "NIS/TfOH", "CH2Cl2", "-20", "2", "78", "1:>20 β"],
+        ["2", "3a", "5b", "NIS/TfOH", "Et2O",   "0",   "3", "65", "1:5 β"],
+        ["3", "3a", "5b", "Tf2O/TTBP","CH2Cl2", "-40", "1", "82", "1:>20 β"]
+      ]
+    }
+  ],
+  "text_blocks": [
+    {
+      "block_id": "BLK_001",
+      "page": 2,
+      "text": "Compound 3a was prepared as a thioglycoside donor bearing a 2-O-benzoyl protecting group to direct β-selectivity via neighbouring group participation.",
+      "section": "Results and Discussion"
+    },
+    {
+      "block_id": "BLK_002",
+      "page": 3,
+      "text": "The glycosylation was performed following Procedure B (see Supporting Information, Section 3). Treatment of donor 3a with acceptor 5b in the presence of NIS (1.5 equiv) and TfOH (0.1 equiv) in CH2Cl2 at -20 °C for 2 h afforded disaccharide 6c in 78% yield as the β-anomer exclusively (α/β > 1:20).",
+      "section": "Results and Discussion"
+    },
+    {
+      "block_id": "BLK_003",
+      "page": 6,
+      "text": "Acceptor 5b is a partially protected galactose derivative with a free 4-OH for coupling.",
+      "section": "Results and Discussion"
+    }
+  ],
+  "si_blocks": [
+    {
+      "block_id": "SI_BLK_001",
+      "text": "Procedure B: General glycosylation procedure. To a solution of thioglycoside donor (1.0 equiv) and acceptor alcohol (1.2 equiv) in anhydrous CH2Cl2 (0.1 M) were added activated 4Å molecular sieves. After stirring at rt for 30 min, the mixture was cooled to -20 °C. NIS (1.5 equiv) was added, followed by TfOH (0.1 equiv, 0.1 M in CH2Cl2). The reaction was stirred at -20 °C for 2 h and quenched by addition of Et3N.",
+      "section": "General Procedures"
+    }
+  ]
+}

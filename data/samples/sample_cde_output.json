@@ -1,0 +1,75 @@
+{
+  "paper_id": "PAPER_001",
+  "chemical_mentions": [
+    {
+      "text": "NIS",
+      "full_name": "N-iodosuccinimide",
+      "role_guess": "promoter",
+      "context": "NIS (1.5 equiv) and TfOH (0.1 equiv) in CH2Cl2 at -20 °C"
+    },
+    {
+      "text": "TfOH",
+      "full_name": "triflic acid",
+      "role_guess": "promoter",
+      "context": "NIS (1.5 equiv) and TfOH (0.1 equiv) in CH2Cl2 at -20 °C"
+    },
+    {
+      "text": "CH2Cl2",
+      "full_name": "dichloromethane",
+      "role_guess": "solvent",
+      "context": "in anhydrous CH2Cl2 (0.1 M)"
+    },
+    {
+      "text": "Et3N",
+      "full_name": "triethylamine",
+      "role_guess": "quench",
+      "context": "quenched by addition of Et3N"
+    }
+  ],
+  "condition_mentions": [
+    {
+      "field": "temperature",
+      "value": "-20 °C",
+      "context": "cooled to -20 °C"
+    },
+    {
+      "field": "time",
+      "value": "2 h",
+      "context": "stirred at -20 °C for 2 h"
+    },
+    {
+      "field": "yield",
+      "value": "78%",
+      "context": "afforded disaccharide 6c in 78% yield"
+    },
+    {
+      "field": "stereochemistry",
+      "value": "beta",
+      "context": "as the β-anomer exclusively (α/β > 1:20)"
+    }
+  ],
+  "procedure_blocks": [
+    {
+      "block_id": "CDE_PROC_001",
+      "label": "Procedure B",
+      "text": "General glycosylation procedure. To a solution of thioglycoside donor (1.0 equiv) and acceptor alcohol (1.2 equiv) in anhydrous CH2Cl2 (0.1 M) were added activated 4Å molecular sieves. After stirring at rt for 30 min, the mixture was cooled to -20 °C. NIS (1.5 equiv) was added, followed by TfOH (0.1 equiv, 0.1 M in CH2Cl2). The reaction was stirred at -20 °C for 2 h and quenched by addition of Et3N."
+    }
+  ],
+  "text_chunks": [
+    {
+      "chunk_id": "CDE_CHUNK_001",
+      "text": "Compound 3a was prepared as a thioglycoside donor bearing a 2-O-benzoyl protecting group to direct β-selectivity via neighbouring group participation.",
+      "section": "Results and Discussion"
+    },
+    {
+      "chunk_id": "CDE_CHUNK_002",
+      "text": "Treatment of donor 3a with acceptor 5b in the presence of NIS/TfOH in CH2Cl2 at -20 °C for 2 h afforded disaccharide 6c in 78% yield as the β-anomer exclusively.",
+      "section": "Results and Discussion"
+    },
+    {
+      "chunk_id": "CDE_CHUNK_003",
+      "text": "Acceptor 5b is a partially protected galactose derivative with a free 4-OH for coupling.",
+      "section": "Results and Discussion"
+    }
+  ]
+}

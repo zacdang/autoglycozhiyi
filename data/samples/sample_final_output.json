@@ -1,0 +1,37 @@
+{
+  "paper_id": "PAPER_001",
+  "title": "Stereoselective Synthesis of 2-Deoxyglycosides via Thioglycoside Donors",
+  "doi": "10.1021/jacs.2023.00001",
+  "figure_id": "FIG_01",
+  "donor_id": "3a",
+  "donor_name": "thioglycoside donor 3a (2-O-benzoyl protected)",
+  "acceptor_id": "5b",
+  "acceptor_name": "partially protected galactose derivative 5b (free 4-OH)",
+  "product_id": "6c",
+  "product_name": "disaccharide 6c",
+  "promoter": "NIS/TfOH",
+  "solvent": "dichloromethane",
+  "temperature": "-20 °C",
+  "time": "2 h",
+  "yield": "78%",
+  "stereochemistry": "beta (alpha/beta > 1:20)",
+  "glycan_or_substrate_notes": "2-deoxyglycoside; neighbouring group participation from 2-O-benzoyl; galactose acceptor",
+  "procedure_reference": "Procedure B",
+  "supporting_chunks": [
+    "Treatment of donor 3a with acceptor 5b in the presence of NIS/TfOH in CH2Cl2 at -20 °C for 2 h afforded disaccharide 6c in 78% yield as the β-anomer exclusively.",
+    "Procedure B: General glycosylation procedure. ... NIS (1.5 equiv) ... TfOH (0.1 equiv) ... CH2Cl2 ... -20 °C ... 2 h ..."
+  ],
+  "provenance": {
+    "donor_id":    "FIG_01 caption text label",
+    "acceptor_id": "FIG_01 caption text label",
+    "product_id":  "FIG_01 text label",
+    "promoter":    "CDE_CHUNK_002",
+    "solvent":     "CDE_PROC_001 / normalized from CH2Cl2",
+    "temperature": "CDE condition mention / TABLE_01 row 1",
+    "time":        "CDE condition mention",
+    "yield":       "CDE condition mention / TABLE_01 row 1",
+    "stereochemistry": "CDE condition mention / TABLE_01 row 1"
+  },
+  "completeness_score": 0.9,
+  "unresolved_fields": []
+}

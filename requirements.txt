@@ -1,0 +1,20 @@
+# Core
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# PDF text extraction (used in real mode for text blocks)
+pdfplumber>=0.10.0
+
+# OpenAI (used by DataRaider in real mode)
+openai>=1.0.0
+
+# MERMaid — install separately from the cloned repo:
+#   pip install -e "../MERMaid[visualheist,dataraider]"
+#   pip install git+https://github.com/thomas0809/RxnScribe.git
+#
+# System dependency for VisualHeist (pdf2image needs poppler):
+#   macOS:  brew install poppler
+#   Ubuntu: apt-get install poppler-utils
+
+# Testing
+pytest>=7.4.0

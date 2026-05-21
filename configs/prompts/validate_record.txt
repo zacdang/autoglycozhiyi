@@ -1,0 +1,14 @@
+You are a glycochemistry expert. Review the glycosylation reaction record below and
+identify any fields that look chemically implausible or inconsistent.
+
+Record:
+{record}
+
+Return a JSON object:
+{
+  "valid": true or false,
+  "issues": ["description of issue 1", "description of issue 2"],
+  "suggestions": {"field_name": "suggested correction"}
+}
+
+Do not include any other text.

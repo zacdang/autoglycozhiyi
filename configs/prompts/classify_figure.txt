@@ -1,0 +1,17 @@
+You are a glycochemistry expert. Given the figure caption and any extracted text labels
+below, decide whether this figure depicts a glycosylation synthesis scheme.
+
+Figure caption:
+{caption}
+
+Extracted labels / text from figure:
+{figure_text}
+
+Answer with a JSON object:
+{
+  "is_glycosylation": true or false,
+  "confidence": 0.0 to 1.0,
+  "reasons": ["reason 1", "reason 2"]
+}
+
+Do not include any other text.
