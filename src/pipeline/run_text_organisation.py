@@ -1,31 +1,25 @@
 """
 Branch A — Text Organisation: CDE extraction + Agent AI chunk classification.
 
-This module is one of three parallel branches that run after the shared input
-layer. It combines ChemDataExtractor (CDE) chemistry-aware parsing with an
-Agent AI classifier that categorises each text chunk by its function in the
-paper (synthesis procedure, compound characterisation, figure caption, etc.).
+In real mode a single GPT-4o call receives all main-article and SI text and
+returns a structured JSON that partitions it into the six evidence categories
+defined in configs/prompts/02_01_text_organization.md.
 
-Architecture position
----------------------
-Shared Input Layer
-→ Branch A: Text Organisation [CDE primary + Agent AI chunk classifier]
-
-Tool assignment
----------------
-Step 1 — CDE: extracts chemical_mentions, condition_mentions, and raw text chunks
-Step 2 — Agent AI (real mode only): classifies each chunk into a semantic category
-          mock mode: all chunks labelled "main_text" (unchanged, for test stability)
+In mock mode the CDE adapter output is used directly with rule-based source
+mapping (no LLM call) for test stability.
 """
+
+import json
+from pathlib import Path
 
 from configs import settings
 from src.adapters.chemdataextractor_adapter import parse_main_text, parse_si_text
-from src.models.paper import Paper
 from src.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
-# Allowed chunk classification labels
+_PROMPT_PATH = Path(__file__).parents[2] / "configs" / "prompts" / "02_01_text_organization.md"
+
 CHUNK_CATEGORIES = [
     "synthesis_procedure",
     "general_procedure",
@@ -40,11 +34,6 @@ def run_text_organisation(documents: dict) -> dict:
     """
     Branch A: CDE extraction + Agent AI chunk classification.
 
-    Step 1: Run CDE on documents["text_blocks"] and documents["si_blocks"].
-    Step 2: Agent AI classifies each chunk into a semantic category.
-            In mock mode: all chunks keep their existing source_type label.
-            In real mode: each chunk is sent to GPT-4o for classification.
-
     Parameters
     ----------
     documents : Output of load_documents() — must contain paper_id,
@@ -53,17 +42,11 @@ def run_text_organisation(documents: dict) -> dict:
     Returns
     -------
     dict with keys:
-        paper_id                  : str
-        synthesis_procedures      : list of chunk dicts
-        general_procedures        : list of chunk dicts
-        compound_characterization : list of chunk dicts
-        figure_captions           : list of chunk dicts
-        tables                    : list of chunk dicts
-        chemical_mentions         : list (from CDE)
-        condition_mentions        : list (from CDE)
-        text_chunks               : list — ALL main-text chunks (backward compat)
-        si_chunks                 : list — ALL SI chunks (backward compat)
-        procedure_blocks          : list — procedure chunks for backward compat
+        paper_id, synthesis_procedures, general_procedures,
+        compound_characterization, figure_captions, tables,
+        chemical_mentions, condition_mentions,
+        text_chunks, si_chunks, procedure_blocks,
+        text_organisation  (full LLM output in real mode, empty dict in mock)
     """
     paper_id    = documents["paper_id"]
     text_blocks = documents.get("text_blocks", [])
@@ -72,8 +55,6 @@ def run_text_organisation(documents: dict) -> dict:
     logger.info(f"[run_text_organisation] Branch A starting for {paper_id}")
 
     # ── Step 1: CDE extraction ─────────────────────────────────────────────────
-    # Pass pre-extracted text_blocks directly to the CDE adapter so it does not
-    # re-read from disk.  In mock mode the adapter returns sample data.
     main_cde = parse_main_text(
         paper_id    = paper_id,
         text_path   = documents.get("pdf_path"),
@@ -85,7 +66,6 @@ def run_text_organisation(documents: dict) -> dict:
         text_blocks = si_blocks if si_blocks else None,
     )
 
-    # Merge CDE chemical/condition mentions from main + SI.
     chemical_mentions  = (
         main_cde.get("chemical_mentions", [])
         + si_cde.get("chemical_mentions", [])
@@ -95,7 +75,6 @@ def run_text_organisation(documents: dict) -> dict:
         + si_cde.get("condition_mentions", [])
     )
 
-    # Build unified chunk lists, giving SI chunks a "si_" prefix on chunk_id.
     text_chunks: list = list(main_cde.get("text_chunks", []))
     si_chunks:   list = _prefix_ids(list(si_cde.get("text_chunks", [])), "si_")
     procedure_blocks: list = (
@@ -109,25 +88,43 @@ def run_text_organisation(documents: dict) -> dict:
         f"{len(text_chunks)} text chunk(s), {len(si_chunks)} SI chunk(s)"
     )
 
-    # ── Step 2: Agent AI chunk classification ──────────────────────────────────
-    all_chunks = text_chunks + si_chunks
+    # ── Step 2: Agent AI (real mode) — batch classification ───────────────────
+    text_organisation: dict = {}
     if settings.PIPELINE_MODE == "real":
-        all_chunks = _classify_chunks_with_llm(all_chunks)
-    # In mock mode: source_type is already set correctly by the CDE adapter.
+        main_text = "\n\n".join(b.get("text", b) if isinstance(b, dict) else str(b)
+                                for b in text_blocks)
+        si_text   = "\n\n".join(b.get("text", b) if isinstance(b, dict) else str(b)
+                                for b in si_blocks)
+        text_organisation = _classify_with_llm(main_text, si_text, paper_id)
+    else:
+        logger.info(f"[run_text_organisation] mock mode — skipping LLM classification")
 
-    # Partition chunks into category buckets.
+    # ── Build category buckets ─────────────────────────────────────────────────
+    # Real mode: populate buckets from LLM JSON output.
+    # Mock mode: use CDE source_type mapping.
     buckets: dict = {cat: [] for cat in CHUNK_CATEGORIES}
-    for chunk in all_chunks:
-        cat = chunk.get("source_type", "main_text")
-        # Map CDE source types to canonical categories.
-        mapped = _map_source_type(cat)
-        if mapped in buckets:
-            buckets[mapped].append(chunk)
+
+    if text_organisation:
+        org = text_organisation.get("text_organisation", {})
+        buckets["synthesis_procedure"] = org.get("synthesis_procedures", [])
+        buckets["general_procedure"]   = org.get("general_procedures", [])
+        buckets["compound_characterization"] = org.get("compound_characterization", [])
+        buckets["figure_caption"]      = org.get("figure_captions", [])
+        buckets["table"]               = org.get("tables", [])
+        buckets["irrelevant"]          = org.get("irrelevant_text", [])
+    else:
+        all_chunks = text_chunks + si_chunks
+        for chunk in all_chunks:
+            cat    = chunk.get("source_type", "main_text")
+            mapped = _map_source_type(cat)
+            if mapped in buckets:
+                buckets[mapped].append(chunk)
 
     logger.info(
         f"[run_text_organisation] Branch A complete for {paper_id}: "
         f"synthesis_procedures={len(buckets['synthesis_procedure'])}, "
-        f"general_procedures={len(buckets['general_procedure'])}"
+        f"general_procedures={len(buckets['general_procedure'])}, "
+        f"compound_characterization={len(buckets['compound_characterization'])}"
     )
 
     return {
@@ -142,84 +139,93 @@ def run_text_organisation(documents: dict) -> dict:
         "text_chunks":               text_chunks,
         "si_chunks":                 si_chunks,
         "procedure_blocks":          procedure_blocks,
+        "text_organisation":         text_organisation,
     }
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
+def _classify_with_llm(main_text: str, si_text: str, paper_id: str) -> dict:
+    """
+    One GPT-4o call that classifies all text according to Module 2.01 prompt.
+    Returns the parsed JSON dict (keys: text_organisation, organisation_summary).
+    Falls back to empty dict on failure.
+    """
+    if not settings.OPENAI_API_KEY:
+        logger.warning("[run_text_organisation] OPENAI_API_KEY not set — skipping LLM")
+        return {}
+
+    system_prompt = _load_system_prompt()
+    if not system_prompt:
+        return {}
+
+    # Truncate to stay under token limits (128 k context window).
+    main_excerpt = main_text[:40_000]
+    si_excerpt   = si_text[:40_000]
+
+    user_content = (
+        f"Main Article text:\n{main_excerpt}\n\n"
+        f"Supporting Information text:\n{si_excerpt}"
+    )
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_content},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=8192,
+        )
+        raw = resp.choices[0].message.content
+        result = json.loads(raw)
+        summary = result.get("organisation_summary", {})
+        logger.info(
+            f"[run_text_organisation] LLM classification complete for {paper_id}: "
+            f"synthesis_procedures={'synthesis_procedures_found' in str(summary)}"
+        )
+        return result
+
+    except Exception as exc:
+        logger.warning(f"[run_text_organisation] LLM call failed for {paper_id}: {exc}")
+        return {}
+
+
+def _load_system_prompt() -> str:
+    """Extract the prompt text block from the Module 2.01 markdown file."""
+    try:
+        md = _PROMPT_PATH.read_text(encoding="utf-8")
+        # The prompt lives between the first ```text fence and its closing ```.
+        start = md.find("```text\n")
+        if start == -1:
+            start = md.find("```\n")
+        end   = md.find("\n```", start + 4)
+        if start != -1 and end != -1:
+            return md[start + md[start:].find("\n") + 1 : end].strip()
+        # Fallback: return entire markdown as the system message.
+        return md.strip()
+    except Exception as exc:
+        logger.warning(f"[run_text_organisation] Could not load prompt file: {exc}")
+        return ""
+
+
 def _map_source_type(source_type: str) -> str:
-    """Map a CDE source_type string to one of our canonical CHUNK_CATEGORIES."""
     mapping = {
-        "procedure":     "synthesis_procedure",
-        "main_text":     "general_procedure",
-        "si_text":       "general_procedure",
-        "caption":       "figure_caption",
-        "table":         "table",
+        "procedure": "synthesis_procedure",
+        "main_text": "general_procedure",
+        "si_text":   "general_procedure",
+        "caption":   "figure_caption",
+        "table":     "table",
     }
     return mapping.get(source_type, "general_procedure")
 
 
 def _prefix_ids(items: list, prefix: str) -> list:
-    """Add a prefix to block_id / chunk_id fields to avoid collisions."""
     for item in items:
         for key in ("block_id", "chunk_id"):
             if key in item:
                 item[key] = prefix + item[key]
     return items
-
-
-def _classify_chunks_with_llm(chunks: list) -> list:
-    """
-    Real-mode Agent AI chunk classifier.
-
-    Calls GPT-4o for each chunk and sets source_type to the predicted category.
-    Only called when PIPELINE_MODE == "real".
-    """
-    if not settings.OPENAI_API_KEY:
-        logger.warning(
-            "[run_text_organisation] OPENAI_API_KEY not set — skipping LLM classification"
-        )
-        return chunks
-
-    try:
-        from openai import OpenAI
-        import json as _json
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
-
-        categories_str = ", ".join(CHUNK_CATEGORIES)
-        classified = []
-
-        for chunk in chunks:
-            text = chunk.get("text", "")[:400]
-            if not text.strip():
-                classified.append(chunk)
-                continue
-
-            prompt = (
-                f"Classify the following text chunk from a glycosylation chemistry paper "
-                f"into exactly one of these categories: {categories_str}.\n"
-                f"Reply with a JSON object: {{\"category\": \"<category>\"}}\n\n"
-                f"Text:\n{text}"
-            )
-            try:
-                resp = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"},
-                    max_tokens=30,
-                )
-                result = _json.loads(resp.choices[0].message.content)
-                cat = result.get("category", "")
-                if cat in CHUNK_CATEGORIES:
-                    chunk = dict(chunk)
-                    chunk["source_type"] = cat
-            except Exception as exc:
-                logger.debug(f"[run_text_organisation] LLM chunk classification failed: {exc}")
-
-            classified.append(chunk)
-
-        return classified
-
-    except ImportError:
-        logger.warning("[run_text_organisation] openai not installed — skipping LLM classification")
-        return chunks

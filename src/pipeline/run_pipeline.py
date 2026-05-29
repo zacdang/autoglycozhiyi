@@ -1,48 +1,46 @@
 """
-Orchestrator — runs the full canonical glycosylation extraction pipeline.
+Orchestrator — runs the full glycosylation extraction pipeline.
 
-Canonical workflow implemented here:
+Workflow:
 
-  Shared Input Layer (Main PDF + SI PDF)
-  → Phase Classification              [Agent AI / LLM]
-  → Figure/Table Extraction           [MERMaid VisualHeist]
-  → BRANCH POINT (3 parallel):
-      Branch A: Text Organisation     [CDE primary + Agent AI chunk classifier]
-      Branch B: Identifier Dictionary [CDE candidates + Agent AI resolver]
-      Branch C: Figure Extraction     [MERMaid VisualHeist outputs]
-  → Figure Relevance Decision         [Agent AI]
-      NO  → stop (produce minimal record)
-      YES → Primary Figure Extraction [MERMaid DataRaider, already done]
-  → Completeness Check                [rule-based + optional Agent AI]
-      COMPLETE   → Final Output
-      INCOMPLETE → Fill Missing Fields (main MERGE node) [Agent AI]
-                   ← merges: figure-derived record
-                             + Branch A text chunks
-                             + Branch B identifier dict
-  → loop back to Completeness Check (max 2 iterations)
-  → Final Output                      [custom code]
-  → Post-processing & Provenance      [custom code]
+  1. Shared Input Layer     load_documents()
+     ↓
+  2. Phase Classification   classify_phase()              [Agent AI]
+     ↓
+  3. MERMaid Extraction     run_mermaid()                 [VisualHeist + DataRaider]
+     ↓ ─────────────────── 3 parallel branches ──────────────────────────────────
+  Branch A  Text Organisation        run_text_organisation()    [Module 2.01]
+  Branch B  Identifier Dictionary    run_identifier_dictionary() [Module 2.02]
+  Branch C  Figure outputs from MERMaid (already in mermaid_output)
+     ↓
+  4. Figure Relevance Decision  classify_relevant_figures()  [Module 2.03 — vision]
+     ↓
+  5. Primary Figure Extraction  run_figure_extraction()      [Module 4 — vision]
+     ↓
+  6. Completeness Check  +  Fill Missing Fields loop          [Modules 5 + 6]
+     ↓
+  7. Post-processing & Provenance  post_process_and_save()    [Module 7]
 """
 
 from src.models.paper import Paper
 from src.models.reaction_record import ReactionRecord
-from src.pipeline.load_documents            import load_documents
-from src.pipeline.classify_phase            import classify_phase
-from src.pipeline.run_mermaid               import run_mermaid
-from src.pipeline.run_text_organisation     import run_text_organisation
-from src.pipeline.run_identifier_dictionary import run_identifier_dictionary
-from src.pipeline.merge_extractions         import merge_extractions
+from src.pipeline.load_documents             import load_documents
+from src.pipeline.classify_phase             import classify_phase
+from src.pipeline.run_mermaid                import run_mermaid
+from src.pipeline.run_text_organisation      import run_text_organisation
+from src.pipeline.run_identifier_dictionary  import run_identifier_dictionary
+from src.pipeline.merge_extractions          import merge_extractions
 from src.pipeline.classify_relevant_figures  import classify_relevant_figures
-from src.pipeline.assign_roles              import assign_roles
+from src.pipeline.run_figure_extraction      import run_figure_extraction
+from src.pipeline.validate_and_normalize     import check_completeness, validate_and_normalize
+from src.pipeline.fill_missing_fields        import fill_scheme_missing_fields, fill_missing_fields
+from src.pipeline.assign_roles               import assign_roles
 from src.pipeline.retrieve_supporting_chunks import retrieve_supporting_chunks
-from src.pipeline.fill_missing_fields       import fill_missing_fields
-from src.pipeline.validate_and_normalize    import validate_and_normalize
-from src.pipeline.save_outputs              import save_outputs
-from src.utils.logging_utils                import get_logger
+from src.pipeline.save_outputs               import post_process_and_save, save_outputs
+from src.utils.logging_utils                 import get_logger
 
 logger = get_logger(__name__)
 
-# Maximum completeness-loop iterations before accepting a partial record.
 MAX_ITERATIONS = 2
 
 
@@ -52,106 +50,119 @@ def run_pipeline(paper: Paper) -> tuple:
 
     Returns
     -------
-    (ReactionRecord, saved_paths_dict)
+    (scheme_results, saved_paths_dict)
+    where scheme_results is a list of final per-scheme dicts.
     """
     logger.info(f"=== Starting pipeline for {paper.paper_id} ===")
 
-    # ── 0. Shared Input Layer ─────────────────────────────────────────────────
-    # Load raw documents (pdfplumber text blocks) once for all branches.
+    # ── 1. Shared Input Layer ─────────────────────────────────────────────────
     documents = load_documents(paper)
 
-    # ── 1. Phase Classification [Agent AI] ────────────────────────────────────
+    # ── 2. Phase Classification ───────────────────────────────────────────────
     phase_info = classify_phase(documents)
     logger.info(
-        f"Phase classification: {phase_info['phase']} "
-        f"(confidence={phase_info['confidence']:.2f})"
+        f"Phase: {phase_info['phase']} (confidence={phase_info['confidence']:.2f})"
     )
 
-    # ── 2. Figure/Table Extraction [MERMaid VisualHeist] ──────────────────────
-    # Pass documents so pdfplumber is not run a second time in real mode.
+    # ── 3. MERMaid Extraction ─────────────────────────────────────────────────
     mermaid_output = run_mermaid(paper, documents=documents)
 
-    # ── 3. Three parallel branches ────────────────────────────────────────────
-    # Branch A: Text Organisation [CDE primary + Agent AI chunk classifier]
+    # ── 3 branches (A + B run in serial; C is mermaid_output) ────────────────
     text_org = run_text_organisation(documents)
+    id_dict  = run_identifier_dictionary(documents, text_org)
 
-    # Branch B: Identifier Dictionary [CDE candidates + Agent AI resolver]
-    id_dict = run_identifier_dictionary(documents, text_org)
-
-    # Branch C: figure outputs are already in mermaid_output (figures, tables).
-
-    # ── 4. Figure Relevance Decision [Agent AI] ───────────────────────────────
-    # Merge MERMaid figures with Branch A text chunks for the unified view.
-    unified = merge_extractions(mermaid_output, text_org)
+    # ── 4. Figure Relevance Decision ──────────────────────────────────────────
+    unified          = merge_extractions(mermaid_output, text_org)
     relevant_figures = classify_relevant_figures(unified)
 
     if not relevant_figures:
         logger.warning(
-            f"No relevant figures found for {paper.paper_id}; "
-            f"producing minimal record."
+            f"No relevant figures for {paper.paper_id} — producing minimal output."
         )
-        # Produce a mostly-NR minimal record and save it.
-        record = ReactionRecord(paper_id=paper.paper_id)
-        record.title = paper.title
-        record.doi   = paper.doi
-        record.phase = phase_info.get("phase", "unknown")
-        record = validate_and_normalize(record)
-        saved_paths = save_outputs(record, unified, id_dict)
-        logger.info(
-            f"=== Pipeline complete (no relevant figures) for {paper.paper_id} "
-            f"(completeness={record.completeness_score:.0%}) ==="
+        saved_paths = post_process_and_save(
+            paper_id             = paper.paper_id,
+            fill_results         = [],
+            scheme_extractions   = [],
+            completeness_reports = [],
+            unified              = unified,
+            id_dict              = id_dict,
         )
-        return record, saved_paths
+        return [], saved_paths
 
-    # ── 5. Primary Figure-Based Extraction [DataRaider] ───────────────────────
-    # Already done inside run_mermaid → mermaid_output["tables"] contains
-    # DataRaider reaction rows.
+    # ── 5. Primary Figure Extraction [Module 4] ───────────────────────────────
+    scheme_extractions = run_figure_extraction(relevant_figures, text_org, id_dict)
 
-    # ── 6. Assign Roles → initial record from MERMaid visual branch ──────────
-    record = assign_roles(
-        paper_id         = paper.paper_id,
-        relevant_figures = relevant_figures,
-        unified          = unified,
-        id_dict          = id_dict,
-    )
-    record.title = paper.title
-    record.doi   = paper.doi
-    record.phase = phase_info.get("phase", "unknown")
+    # ── 6. Completeness Check + Fill Missing Fields loop [Modules 5 + 6] ─────
+    completeness_reports = []
+    fill_results         = []
 
-    # ── 7–9. Completeness Check → decision → fill loop ────────────────────────
     for iteration in range(MAX_ITERATIONS):
-        # Completeness Check [rule-based]
-        record = validate_and_normalize(record)
+        completeness_reports = check_completeness(scheme_extractions, text_org, id_dict)
 
-        if record.completeness_score >= 0.8 or not record.unresolved_fields:
-            logger.info(
-                f"COMPLETE after iteration {iteration}: "
-                f"score={record.completeness_score:.0%}"
+        all_complete = all(r.get("is_complete", False) for r in completeness_reports)
+        if all_complete:
+            logger.info(f"All schemes complete after iteration {iteration}")
+            # Still run fill once to enrich compound names from id_dict.
+            fill_results = fill_scheme_missing_fields(
+                scheme_extractions, completeness_reports, text_org, id_dict
             )
-            break   # COMPLETE → exit loop
+            break
 
-        # INCOMPLETE → Fill Missing Fields (main MERGE node) [Agent AI]
         logger.info(
-            f"INCOMPLETE (iteration {iteration}, "
-            f"score={record.completeness_score:.0%}, "
-            f"missing={record.unresolved_fields}) — running fill loop"
+            f"Iteration {iteration}: "
+            f"{sum(1 for r in completeness_reports if not r.get('is_complete'))}/"
+            f"{len(completeness_reports)} scheme(s) incomplete — filling …"
         )
-        supporting_chunks = retrieve_supporting_chunks(record, unified)
-        record = fill_missing_fields(
-            record,
-            supporting_chunks,
-            text_org = text_org,
-            id_dict  = id_dict,
+        fill_results = fill_scheme_missing_fields(
+            scheme_extractions, completeness_reports, text_org, id_dict
         )
 
-    # Final validate to ensure completeness_score is up-to-date.
-    record = validate_and_normalize(record)
+        # Patch scheme_extractions with filled data for the next iteration.
+        scheme_extractions = _patch_extractions(scheme_extractions, fill_results)
 
-    # ── 10–11. Final Output + Post-processing & Provenance [custom code] ──────
-    saved_paths = save_outputs(record, unified, id_dict)
+    if not fill_results:
+        # Ran all iterations without breaking early — do one final fill pass.
+        fill_results = fill_scheme_missing_fields(
+            scheme_extractions, completeness_reports, text_org, id_dict
+        )
+
+    # ── 7. Post-processing & Provenance [Module 7] ────────────────────────────
+    saved_paths = post_process_and_save(
+        paper_id             = paper.paper_id,
+        fill_results         = fill_results,
+        scheme_extractions   = scheme_extractions,
+        completeness_reports = completeness_reports,
+        unified              = unified,
+        id_dict              = id_dict,
+    )
 
     logger.info(
-        f"=== Pipeline complete for {paper.paper_id} "
-        f"(completeness={record.completeness_score:.0%}) ==="
+        f"=== Pipeline complete for {paper.paper_id}: "
+        f"{len(scheme_extractions)} scheme(s) extracted ==="
     )
-    return record, saved_paths
+    return fill_results, saved_paths
+
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _patch_extractions(scheme_extractions: list, fill_results: list) -> list:
+    """
+    After a fill pass, update scheme_extractions with the filled step data
+    so the next completeness check sees the improvements.
+    """
+    fill_by_fig = {r.get("figure_id"): r for r in fill_results}
+    patched = []
+    for scheme in scheme_extractions:
+        fig_id = scheme.get("figure_id")
+        fill   = fill_by_fig.get(fig_id, {})
+        filled = fill.get("filled_output", {})
+        if filled:
+            scheme = dict(scheme)
+            step_analysis = dict(scheme.get("step_analysis", {}))
+            if filled.get("reaction_steps"):
+                step_analysis["reaction_steps"] = filled["reaction_steps"]
+            if filled.get("phase"):
+                step_analysis["phase"] = filled["phase"]
+            scheme["step_analysis"] = step_analysis
+        patched.append(scheme)
+    return patched

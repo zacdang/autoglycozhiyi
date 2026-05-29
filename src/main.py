@@ -64,9 +64,18 @@ def main(argv=None) -> int:
     # Run the pipeline for each paper
     for paper in papers:
         try:
-            record, saved_paths = run_pipeline(paper)
-            print(f"\n✓ {paper.paper_id}: completeness={record.completeness_score:.0%}")
-            print(f"  Final record → {saved_paths.get('final_record')}")
+            scheme_results, saved_paths = run_pipeline(paper)
+            n_schemes = len(scheme_results)
+            n_complete = sum(
+                1 for r in scheme_results
+                if not r.get("unfilled_fields")
+            )
+            print(
+                f"\n✓ {paper.paper_id}: "
+                f"{n_schemes} scheme(s) extracted, {n_complete} fully filled"
+            )
+            print(f"  Schemes    → {saved_paths.get('final_schemes')}")
+            print(f"  Provenance → {saved_paths.get('provenance')}")
         except Exception as exc:
             logger.exception(f"Pipeline failed for {paper.paper_id}: {exc}")
 
