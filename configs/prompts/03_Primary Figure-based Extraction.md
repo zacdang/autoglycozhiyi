@@ -268,14 +268,28 @@ A) If phase = solution
   "acceptor": "string | null",
   "product": "string | null",
   "solution_conditions": {
-    "solvent": "string | null",
-    "temperature": "string | null",
-    "time": "string | null",
-    "promoter_or_activator": "string | null",
-    "other_reagents": "string | null",
+    "donor_smiles": "string | null",
+    "donor_mass_mg": "string | null",
+    "donor_mmol": "string | null",
+    "acceptor_smiles": "string | null",
+    "acceptor_mass_mg": "string | null",
+    "acceptor_mmol": "string | null",
     "equivalents": "string | null",
-    "yield": "string | null",
-    "stereoselectivity": "string | null"
+    "activator_1_name": "string | null",
+    "activator_1_mass_mg": "string | null",
+    "activator_1_mmol": "string | null",
+    "activator_2_name": "string | null",
+    "activator_2_volume_uL": "string | null",
+    "activator_2_mmol": "string | null",
+    "solvent_name": "string | null",
+    "solvent_volume_mL": "string | null",
+    "temperature_initial_celsius": "string | null",
+    "temperature_final_celsius": "string | null",
+    "reaction_time_min": "string | null",
+    "product_mass_mg": "string | null",
+    "a_b_ratio": "string | null",
+    "yield_percent": "string | null",
+    "comments": "string | null"
   }
 }
 
@@ -295,13 +309,24 @@ B) If phase = solid
   "acceptor": "string | null",
   "product": "string | null",
   "solid_conditions": {
-    "support_or_linker": "string | null",
-    "cycle_or_stage_clue": "string | null",
-    "explicit_reagents": "string | null",
-    "explicit_solvent": "string | null",
-    "explicit_temperature": "string | null",
-    "explicit_time": "string | null",
-    "cleavage_or_global_deprotection_condition": "string | null"
+    "donor_smiles": "string | null",
+    "donor_mmol": "string | null",
+    "deprotected_group_type": "string | null",
+    "equivalents": "string | null",
+    "resin_mass_mg": "string | null",
+    "activator_name": "string | null",
+    "activator_volume_mL": "string | null",
+    "activator_mmol": "string | null",
+    "solvent_name": "string | null",
+    "solvent_volume_mL": "string | null",
+    "T1_celsius": "string | null",
+    "t1_min": "string | null",
+    "T2_celsius": "string | null",
+    "t2_min": "string | null",
+    "product_mass_mg": "string | null",
+    "a_b_ratio": "string | null",
+    "yield_percent": "string | null",
+    "comments": "string | null"
   }
 }
 
@@ -389,14 +414,28 @@ The `step_analysis` section should contain:
         "acceptor": "42",
         "product": "43",
         "solution_conditions": {
-          "solvent": "explicit solvent if present or null",
-          "temperature": "explicit temperature if present or null",
-          "time": "explicit time if present or null",
-          "promoter_or_activator": "explicit promoter or activator if present or null",
-          "other_reagents": "explicit other reagents if present or null",
+          "donor_smiles": "explicit SMILES if present or null",
+          "donor_mass_mg": "explicit mass in mg if present or null",
+          "donor_mmol": "explicit mmol if present or null",
+          "acceptor_smiles": "explicit SMILES if present or null",
+          "acceptor_mass_mg": "explicit mass in mg if present or null",
+          "acceptor_mmol": "explicit mmol if present or null",
           "equivalents": "explicit equivalents if present or null",
-          "yield": "explicit yield if present or null",
-          "stereoselectivity": "explicit stereoselectivity if present or null"
+          "activator_1_name": "primary activator name e.g. NIS or null",
+          "activator_1_mass_mg": "explicit mass in mg if present or null",
+          "activator_1_mmol": "explicit mmol if present or null",
+          "activator_2_name": "secondary activator name e.g. TfOH or null",
+          "activator_2_volume_uL": "explicit volume in uL if present or null",
+          "activator_2_mmol": "explicit mmol if present or null",
+          "solvent_name": "explicit solvent e.g. DCM or null",
+          "solvent_volume_mL": "explicit volume in mL if present or null",
+          "temperature_initial_celsius": "starting temperature e.g. -20 or null",
+          "temperature_final_celsius": "final temperature e.g. -20 or null",
+          "reaction_time_min": "reaction time in minutes or null",
+          "product_mass_mg": "explicit product mass in mg if present or null",
+          "a_b_ratio": "explicit alpha:beta ratio if present or null",
+          "yield_percent": "explicit yield e.g. 82% or null",
+          "comments": "any additional notes or null"
         }
       },
       {

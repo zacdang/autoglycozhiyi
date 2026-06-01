@@ -21,6 +21,7 @@ Saved files per paper:
   data/intermediate/{paper_id}_report.json
 """
 
+import csv
 import json
 from pathlib import Path
 from typing import Optional, List
@@ -126,6 +127,11 @@ def post_process_and_save(
     comp_path = intermediate_dir / f"{paper_id}_completeness.json"
     save_json(completeness_reports, comp_path)
     paths["completeness_reports"] = str(comp_path)
+
+    # 6. CSV export — routed to solution or solid template based on phase
+    csv_path = export_to_csv(paper_id, final_schemes, output_dir)
+    if csv_path:
+        paths["csv_export"] = str(csv_path)
 
     logger.info(f"Saved all outputs for {paper_id}:")
     for name, path in paths.items():
@@ -237,6 +243,180 @@ def _load_prompt() -> str:
     except Exception as exc:
         logger.warning(f"[post_process_and_save] Could not load prompt: {exc}")
         return ""
+
+
+# ── CSV export ───────────────────────────────────────────────────────────────
+
+# Column headers matching the two ground-truth templates exactly.
+_SOLUTION_COLUMNS = [
+    "DOI", "Donor_ID", "Donor_Name", "Donor_SMILES",
+    "Donor_Mass_mg", "Donor_mmol",
+    "Acceptor_ID", "Acceptor_Name", "Acceptor_SMILES",
+    "Acceptor_Mass_mg", "Acceptor_mmol", "Equiv.",
+    "Activator_1", "Activator_1_Mass_mg", "Activator_1_mmol",
+    "Activator_2", "Activator_2_Volume_uL", "Activator_2_mmol",
+    "Solvent_Name", "Solvent_Volume_mL",
+    "Temperature_1_initial", "Temperature_final_Celsius",
+    "Reaction_Time_min",
+    "Product_ID", "Product_Name", "Product_Mass_mg",
+    "a:b_ratio", "Yield(%)", "Step", "Comments",
+]
+
+_SOLID_COLUMNS = [
+    "DOI", "Donor_ID", "Donor_Name", "Donor_SMILES",
+    "Acceptor_ID", "Deprotected_Group_Type",
+    "Donor_mmol", "Equiv.", "Resin_mass_mg",
+    "Activator_Name", "Activator_1_volume_mL", "Activator_1_mmol",
+    "Solvent_Name", "Solvent_Volume_mL",
+    "T1_Celsius", "t1_min", "T2_Celcius", "t2_min",
+    "Product_mass_mg", "Product_Name",
+    "Yield(%)", "a:b_ratio", "Step", "Comments",
+]
+
+
+def export_to_csv(
+    paper_id: str,
+    final_schemes: List[dict],
+    output_dir: Path,
+    doi: str = "",
+) -> Optional[Path]:
+    """
+    Export all glycosylation steps from final_schemes to a CSV file.
+
+    Routes to the solution-phase or solid-phase column template based on
+    the phase field in each scheme's final_output.  If a paper contains both
+    phases (rare), two separate files are written.
+
+    Parameters
+    ----------
+    paper_id      : Used to name the output file.
+    final_schemes : List of post-processed scheme dicts from post_process_and_save().
+    output_dir    : Where to write the CSV.
+    doi           : Optional DOI string to fill the DOI column.
+
+    Returns
+    -------
+    Path to the CSV file written, or None if no glycosylation steps found.
+    """
+    solution_rows: List[dict] = []
+    solid_rows:    List[dict] = []
+
+    for scheme in final_schemes:
+        final = scheme.get("final_output", {})
+        phase = final.get("phase", "unknown").lower()
+        steps = final.get("reaction_steps", [])
+
+        for step in steps:
+            if step.get("reaction_type") != "glycosylation":
+                continue
+
+            step_num = step.get("step", "")
+
+            # ── Helper to safely get a nested compound field ──────────────────
+            def _cid(role):
+                v = step.get(role)
+                return v.get("compound_id", "") if isinstance(v, dict) else (v or "")
+
+            def _cname(role):
+                v = step.get(role)
+                return v.get("compound_name", "") if isinstance(v, dict) else ""
+
+            donor_id   = _cid("donor")
+            donor_name = _cname("donor")
+            acc_id     = _cid("acceptor")
+            acc_name   = _cname("acceptor")
+            prod_id    = _cid("product")
+            prod_name  = _cname("product")
+
+            if phase == "solid":
+                c = step.get("solid_conditions", {}) or {}
+                solid_rows.append({
+                    "DOI":                   doi,
+                    "Donor_ID":              donor_id,
+                    "Donor_Name":            donor_name,
+                    "Donor_SMILES":          c.get("donor_smiles", ""),
+                    "Acceptor_ID":           acc_id,
+                    "Deprotected_Group_Type": c.get("deprotected_group_type", ""),
+                    "Donor_mmol":            c.get("donor_mmol", ""),
+                    "Equiv.":                c.get("equivalents", ""),
+                    "Resin_mass_mg":         c.get("resin_mass_mg", ""),
+                    "Activator_Name":        c.get("activator_name", ""),
+                    "Activator_1_volume_mL": c.get("activator_volume_mL", ""),
+                    "Activator_1_mmol":      c.get("activator_mmol", ""),
+                    "Solvent_Name":          c.get("solvent_name", ""),
+                    "Solvent_Volume_mL":     c.get("solvent_volume_mL", ""),
+                    "T1_Celsius":            c.get("T1_celsius", ""),
+                    "t1_min":                c.get("t1_min", ""),
+                    "T2_Celcius":            c.get("T2_celsius", ""),
+                    "t2_min":                c.get("t2_min", ""),
+                    "Product_mass_mg":       c.get("product_mass_mg", ""),
+                    "Product_Name":          prod_name,
+                    "Yield(%)":              c.get("yield_percent", ""),
+                    "a:b_ratio":             c.get("a_b_ratio", ""),
+                    "Step":                  step_num,
+                    "Comments":              c.get("comments", ""),
+                })
+            else:
+                c = step.get("solution_conditions", {}) or {}
+                solution_rows.append({
+                    "DOI":                    doi,
+                    "Donor_ID":               donor_id,
+                    "Donor_Name":             donor_name,
+                    "Donor_SMILES":           c.get("donor_smiles", ""),
+                    "Donor_Mass_mg":          c.get("donor_mass_mg", ""),
+                    "Donor_mmol":             c.get("donor_mmol", ""),
+                    "Acceptor_ID":            acc_id,
+                    "Acceptor_Name":          acc_name,
+                    "Acceptor_SMILES":        c.get("acceptor_smiles", ""),
+                    "Acceptor_Mass_mg":       c.get("acceptor_mass_mg", ""),
+                    "Acceptor_mmol":          c.get("acceptor_mmol", ""),
+                    "Equiv.":                 c.get("equivalents", ""),
+                    "Activator_1":            c.get("activator_1_name", ""),
+                    "Activator_1_Mass_mg":    c.get("activator_1_mass_mg", ""),
+                    "Activator_1_mmol":       c.get("activator_1_mmol", ""),
+                    "Activator_2":            c.get("activator_2_name", ""),
+                    "Activator_2_Volume_uL":  c.get("activator_2_volume_uL", ""),
+                    "Activator_2_mmol":       c.get("activator_2_mmol", ""),
+                    "Solvent_Name":           c.get("solvent_name", ""),
+                    "Solvent_Volume_mL":      c.get("solvent_volume_mL", ""),
+                    "Temperature_1_initial":  c.get("temperature_initial_celsius", ""),
+                    "Temperature_final_Celsius": c.get("temperature_final_celsius", ""),
+                    "Reaction_Time_min":      c.get("reaction_time_min", ""),
+                    "Product_ID":             prod_id,
+                    "Product_Name":           prod_name,
+                    "Product_Mass_mg":        c.get("product_mass_mg", ""),
+                    "a:b_ratio":              c.get("a_b_ratio", ""),
+                    "Yield(%)":               c.get("yield_percent", ""),
+                    "Step":                   step_num,
+                    "Comments":              c.get("comments", ""),
+                })
+
+    if not solution_rows and not solid_rows:
+        logger.warning(f"[export_to_csv] No glycosylation steps found for {paper_id}")
+        return None
+
+    last_path = None
+
+    if solution_rows:
+        path = output_dir / f"{paper_id}_solution.csv"
+        _write_csv(path, _SOLUTION_COLUMNS, solution_rows)
+        logger.info(f"[export_to_csv] Solution CSV → {path} ({len(solution_rows)} row(s))")
+        last_path = path
+
+    if solid_rows:
+        path = output_dir / f"{paper_id}_solid.csv"
+        _write_csv(path, _SOLID_COLUMNS, solid_rows)
+        logger.info(f"[export_to_csv] Solid CSV → {path} ({len(solid_rows)} row(s))")
+        last_path = path
+
+    return last_path
+
+
+def _write_csv(path: Path, columns: List[str], rows: List[dict]) -> None:
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 # ── Legacy path (ReactionRecord) ─────────────────────────────────────────────
