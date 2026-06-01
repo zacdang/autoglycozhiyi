@@ -50,13 +50,13 @@ def classify_phase(documents: dict) -> dict:
         return {"phase": "unknown", "confidence": 0.0, "reasoning": "no API key"}
 
     text_blocks = documents.get("text_blocks", [])
-    # Build a short excerpt from the first few blocks.
+    # Use up to 3000 chars from across all blocks for better signal.
     excerpt = ""
     for blk in text_blocks:
         excerpt += blk.get("text", "") + " "
-        if len(excerpt) >= 500:
+        if len(excerpt) >= 3000:
             break
-    excerpt = excerpt[:500].strip()
+    excerpt = excerpt[:3000].strip()
 
     if not excerpt:
         logger.warning("[classify_phase] No text available for phase classification")
@@ -67,13 +67,17 @@ def classify_phase(documents: dict) -> dict:
         client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
         prompt = (
-            "You are a chemistry expert. Based on the following excerpt from a "
-            "scientific paper about glycosylation, classify the synthesis phase as "
-            "'solution' (solution-phase synthesis) or 'solid' (solid-phase synthesis). "
+            "You are a chemistry expert. Based on the following text from a "
+            "scientific paper about glycosylation synthesis, classify whether "
+            "the reactions are solution-phase or solid-phase.\n\n"
+            "solution-phase clues: isolated intermediates, solution reactions, "
+            "DCM/THF solvents, NIS/TfOH promoters, column chromatography.\n"
+            "solid-phase clues: resin, linker, solid support, AGA, automated "
+            "glycan assembly, building blocks (BB), cycles, Fmoc deprotection.\n\n"
             "Reply with a JSON object with exactly these keys: "
             "phase (string: 'solution', 'solid', or 'unknown'), "
             "confidence (float 0-1), reasoning (one sentence).\n\n"
-            f"Excerpt:\n{excerpt}"
+            f"Text:\n{excerpt}"
         )
 
         response = client.chat.completions.create(

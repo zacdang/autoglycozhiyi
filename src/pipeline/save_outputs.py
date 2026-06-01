@@ -409,6 +409,11 @@ def export_to_csv(
         logger.info(f"[export_to_csv] Solid CSV → {path} ({len(solid_rows)} row(s))")
         last_path = path
 
+    # Always write the Excel file with both tabs
+    excel_path = output_dir / "test.xlsx"
+    _write_excel(excel_path, _SOLUTION_COLUMNS, solution_rows, _SOLID_COLUMNS, solid_rows)
+    logger.info(f"[export_to_csv] Excel → {excel_path} (solution: {len(solution_rows)} row(s), solid: {len(solid_rows)} row(s))")
+
     return last_path
 
 
@@ -417,6 +422,78 @@ def _write_csv(path: Path, columns: List[str], rows: List[dict]) -> None:
         writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _write_excel(
+    path: Path,
+    solution_cols: List[str],
+    solution_rows: List[dict],
+    solid_cols: List[str],
+    solid_rows: List[dict],
+) -> None:
+    """Write test.xlsx with a Solution tab and a Solid tab."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        logger.warning("[export_to_csv] openpyxl not installed — skipping Excel export. Run: pip install openpyxl")
+        return
+
+    wb = Workbook()
+
+    # ── Solution tab ──────────────────────────────────────────────────────────
+    ws_sol = wb.active
+    ws_sol.title = "Solution"
+    _fill_sheet(ws_sol, solution_cols, solution_rows)
+
+    # ── Solid tab ─────────────────────────────────────────────────────────────
+    ws_sol2 = wb.create_sheet(title="Solid")
+    _fill_sheet(ws_sol2, solid_cols, solid_rows)
+
+    wb.save(path)
+
+
+def _fill_sheet(ws, columns: List[str], rows: List[dict]) -> None:
+    """Write headers + rows into a worksheet with basic formatting."""
+    try:
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.utils import get_column_letter
+
+        HEADER_FILL  = PatternFill("solid", fgColor="4472C4")
+        HEADER_FONT  = Font(bold=True, color="FFFFFF")
+        HEADER_ALIGN = Alignment(horizontal="center", wrap_text=True)
+
+        # Write header row
+        for col_idx, col_name in enumerate(columns, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=col_name)
+            cell.fill  = HEADER_FILL
+            cell.font  = HEADER_FONT
+            cell.alignment = HEADER_ALIGN
+
+        # Write data rows
+        for row_idx, row_data in enumerate(rows, start=2):
+            for col_idx, col_name in enumerate(columns, start=1):
+                ws.cell(row=row_idx, column=col_idx, value=row_data.get(col_name, ""))
+
+        # Auto-fit column widths (approximate)
+        for col_idx, col_name in enumerate(columns, start=1):
+            max_len = max(
+                len(str(col_name)),
+                *(len(str(r.get(col_name, "") or "")) for r in rows) if rows else [0],
+            )
+            ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 2, 40)
+
+        # Freeze top row
+        ws.freeze_panes = "A2"
+
+    except Exception as exc:
+        # If styling fails just write plain data
+        for col_idx, col_name in enumerate(columns, start=1):
+            ws.cell(row=1, column=col_idx, value=col_name)
+        for row_idx, row_data in enumerate(rows, start=2):
+            for col_idx, col_name in enumerate(columns, start=1):
+                ws.cell(row=row_idx, column=col_idx, value=row_data.get(col_name, ""))
 
 
 # ── Legacy path (ReactionRecord) ─────────────────────────────────────────────

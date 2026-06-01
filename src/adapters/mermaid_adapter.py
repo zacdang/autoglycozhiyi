@@ -190,9 +190,27 @@ def _run_real(
 # ── Step 1 helper: VisualHeist ────────────────────────────────────────────────
 
 def _build_figures_from_existing_images(image_dir: Path) -> list:
-    """Build figure dicts from PNGs that VisualHeist already saved on a prior run."""
+    """
+    Build figure dicts from PNGs that VisualHeist already saved on a prior run.
+    DataRaider moves images into relevant_images/ and irrelevant_images/ subdirs,
+    so we search all subfolders to find every PNG.
+    """
+    # Prefer relevant_images/ first, then root, then irrelevant_images/
+    png_files = (
+        sorted((image_dir / "relevant_images").glob("*.png"))
+        + sorted(image_dir.glob("*.png"))
+        + sorted((image_dir / "irrelevant_images").glob("*.png"))
+    )
+    # Deduplicate while preserving order
+    seen = set()
+    unique_pngs = []
+    for p in png_files:
+        if p not in seen:
+            seen.add(p)
+            unique_pngs.append(p)
+
     figures = []
-    for i, png in enumerate(sorted(image_dir.glob("*.png"))):
+    for i, png in enumerate(unique_pngs):
         figures.append({
             "figure_id": f"FIG_{i+1:02d}",
             "page": 0,

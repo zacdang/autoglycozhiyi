@@ -136,7 +136,9 @@ def _extract_with_llm(main_text: str, si_text: str, paper_id: str) -> dict:
 
     user_content = (
         f"Main Article:\n{main_excerpt}\n\n"
-        f"Supporting Information:\n{si_excerpt}"
+        f"Supporting Information:\n{si_excerpt}\n\n"
+        f"Return your answer as valid JSON only, "
+        f"with keys 'verified_compounds' and 'unresolved_mentions'."
     )
 
     try:
