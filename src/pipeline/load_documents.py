@@ -52,6 +52,16 @@ def load_documents(paper) -> dict:
 
     logger.info(f"[load_documents] Loading documents for {paper_id}")
 
+    # Auto-download missing PDFs (tries direct download; prints manual link if blocked)
+    try:
+        from src.utils.download_papers import ensure_pdfs
+        ensure_pdfs(paper)
+        # Refresh paths in case ensure_pdfs updated them
+        pdf_path = paper.pdf_path
+        si_path  = getattr(paper, "si_path", None)
+    except Exception as _dl_exc:
+        logger.debug(f"[load_documents] PDF auto-download skipped: {_dl_exc}")
+
     if settings.PIPELINE_MODE == "mock":
         # In mock mode the MERMaid adapter serves synthetic data; no real PDF needed.
         logger.info(f"[load_documents] mock mode — skipping pdfplumber for {paper_id}")
