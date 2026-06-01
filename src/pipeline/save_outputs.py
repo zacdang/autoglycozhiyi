@@ -51,6 +51,8 @@ def post_process_and_save(
     id_dict: dict,
     output_dir: Optional[Path] = None,
     intermediate_dir: Optional[Path] = None,
+    doi: str = "",
+    si_data: Optional[dict] = None,
 ) -> dict:
     """
     Run Module 7 post-processing on each filled scheme, then save all outputs.
@@ -129,7 +131,7 @@ def post_process_and_save(
     paths["completeness_reports"] = str(comp_path)
 
     # 6. CSV export — routed to solution or solid template based on phase
-    csv_path = export_to_csv(paper_id, final_schemes, output_dir)
+    csv_path = export_to_csv(paper_id, final_schemes, output_dir, doi=doi, si_data=si_data or {})
     if csv_path:
         paths["csv_export"] = str(csv_path)
 
@@ -279,6 +281,7 @@ def export_to_csv(
     final_schemes: List[dict],
     output_dir: Path,
     doi: str = "",
+    si_data: Optional[dict] = None,
 ) -> Optional[Path]:
     """
     Export all glycosylation steps from final_schemes to a CSV file.
@@ -300,6 +303,7 @@ def export_to_csv(
     """
     solution_rows: List[dict] = []
     solid_rows:    List[dict] = []
+    si_data = si_data or {}
 
     for scheme in final_schemes:
         final = scheme.get("final_output", {})
@@ -328,6 +332,10 @@ def export_to_csv(
             prod_id    = _cid("product")
             prod_name  = _cname("product")
 
+            # ── SI data for this product (fills masses, mmol, SMILES) ─────────
+            # si_data is keyed by product_id → experimental dict
+            si = si_data.get(str(prod_id), {}) or {}
+
             if phase == "solid":
                 c = step.get("solid_conditions") or {}
                 if not c:
@@ -341,31 +349,38 @@ def export_to_csv(
                         "yield_percent":         flat.get("yield", ""),
                         "a_b_ratio":             flat.get("stereoselectivity", ""),
                     }
+
+                def _vs(si_key, c_key=None):
+                    si_val = si.get(si_key)
+                    if si_val not in (None, "", "null"):
+                        return si_val
+                    return c.get(c_key or si_key, "") or ""
+
                 solid_rows.append({
                     "DOI":                   doi,
-                    "Donor_ID":              donor_id,
+                    "Donor_ID":              si.get("donor_id") or donor_id,
                     "Donor_Name":            donor_name,
-                    "Donor_SMILES":          c.get("donor_smiles", ""),
-                    "Acceptor_ID":           acc_id,
-                    "Deprotected_Group_Type": c.get("deprotected_group_type", ""),
-                    "Donor_mmol":            c.get("donor_mmol", ""),
-                    "Equiv.":                c.get("equivalents", ""),
-                    "Resin_mass_mg":         c.get("resin_mass_mg", ""),
-                    "Activator_Name":        c.get("activator_name", ""),
-                    "Activator_1_volume_mL": c.get("activator_volume_mL", ""),
-                    "Activator_1_mmol":      c.get("activator_mmol", ""),
-                    "Solvent_Name":          c.get("solvent_name", ""),
-                    "Solvent_Volume_mL":     c.get("solvent_volume_mL", ""),
-                    "T1_Celsius":            c.get("T1_celsius", ""),
-                    "t1_min":                c.get("t1_min", ""),
-                    "T2_Celcius":            c.get("T2_celsius", ""),
-                    "t2_min":                c.get("t2_min", ""),
-                    "Product_mass_mg":       c.get("product_mass_mg", ""),
+                    "Donor_SMILES":          _vs("donor_smiles"),
+                    "Acceptor_ID":           si.get("acceptor_id") or acc_id,
+                    "Deprotected_Group_Type": _vs("deprotected_group_type"),
+                    "Donor_mmol":            _vs("donor_mmol"),
+                    "Equiv.":                _vs("equivalents"),
+                    "Resin_mass_mg":         _vs("resin_mass_mg"),
+                    "Activator_Name":        _vs("activator_1_name", "activator_name"),
+                    "Activator_1_volume_mL": _vs("activator_1_volume_mL", "activator_volume_mL"),
+                    "Activator_1_mmol":      _vs("activator_1_mmol", "activator_mmol"),
+                    "Solvent_Name":          _vs("solvent_name"),
+                    "Solvent_Volume_mL":     _vs("solvent_volume_mL"),
+                    "T1_Celsius":            _vs("temperature_initial_celsius", "T1_celsius"),
+                    "t1_min":                _vs("t1_min"),
+                    "T2_Celcius":            _vs("temperature_final_celsius", "T2_celsius"),
+                    "t2_min":                _vs("t2_min"),
+                    "Product_mass_mg":       _vs("product_mass_mg"),
                     "Product_Name":          prod_name,
-                    "Yield(%)":              c.get("yield_percent", ""),
-                    "a:b_ratio":             c.get("a_b_ratio", ""),
+                    "Yield(%)":              _vs("yield_percent"),
+                    "a:b_ratio":             _vs("a_b_ratio"),
                     "Step":                  step_num,
-                    "Comments":              c.get("comments", ""),
+                    "Comments":              _vs("comments"),
                 })
             else:
                 c = step.get("solution_conditions") or {}
@@ -381,37 +396,46 @@ def export_to_csv(
                         "yield_percent":                 flat.get("yield", ""),
                         "a_b_ratio":                     flat.get("stereoselectivity", ""),
                     }
+
+                # ── Helper: SI value > figure value > empty ───────────────────
+                def _v(si_key, c_key=None):
+                    """Return SI value if present, else figure-extracted value."""
+                    si_val = si.get(si_key)
+                    if si_val not in (None, "", "null"):
+                        return si_val
+                    return c.get(c_key or si_key, "") or ""
+
                 solution_rows.append({
                     "DOI":                    doi,
-                    "Donor_ID":               donor_id,
+                    "Donor_ID":               si.get("donor_id") or donor_id,
                     "Donor_Name":             donor_name,
-                    "Donor_SMILES":           c.get("donor_smiles", ""),
-                    "Donor_Mass_mg":          c.get("donor_mass_mg", ""),
-                    "Donor_mmol":             c.get("donor_mmol", ""),
-                    "Acceptor_ID":            acc_id,
+                    "Donor_SMILES":           _v("donor_smiles"),
+                    "Donor_Mass_mg":          _v("donor_mass_mg"),
+                    "Donor_mmol":             _v("donor_mmol"),
+                    "Acceptor_ID":            si.get("acceptor_id") or acc_id,
                     "Acceptor_Name":          acc_name,
-                    "Acceptor_SMILES":        c.get("acceptor_smiles", ""),
-                    "Acceptor_Mass_mg":       c.get("acceptor_mass_mg", ""),
-                    "Acceptor_mmol":          c.get("acceptor_mmol", ""),
-                    "Equiv.":                 c.get("equivalents", ""),
-                    "Activator_1":            c.get("activator_1_name", ""),
-                    "Activator_1_Mass_mg":    c.get("activator_1_mass_mg", ""),
-                    "Activator_1_mmol":       c.get("activator_1_mmol", ""),
-                    "Activator_2":            c.get("activator_2_name", ""),
-                    "Activator_2_Volume_uL":  c.get("activator_2_volume_uL", ""),
-                    "Activator_2_mmol":       c.get("activator_2_mmol", ""),
-                    "Solvent_Name":           c.get("solvent_name", ""),
-                    "Solvent_Volume_mL":      c.get("solvent_volume_mL", ""),
-                    "Temperature_1_initial":  c.get("temperature_initial_celsius", ""),
-                    "Temperature_final_Celsius": c.get("temperature_final_celsius", ""),
-                    "Reaction_Time_min":      c.get("reaction_time_min", ""),
+                    "Acceptor_SMILES":        _v("acceptor_smiles"),
+                    "Acceptor_Mass_mg":       _v("acceptor_mass_mg"),
+                    "Acceptor_mmol":          _v("acceptor_mmol"),
+                    "Equiv.":                 _v("equivalents"),
+                    "Activator_1":            _v("activator_1_name"),
+                    "Activator_1_Mass_mg":    _v("activator_1_mass_mg"),
+                    "Activator_1_mmol":       _v("activator_1_mmol"),
+                    "Activator_2":            _v("activator_2_name"),
+                    "Activator_2_Volume_uL":  _v("activator_2_volume_uL"),
+                    "Activator_2_mmol":       _v("activator_2_mmol"),
+                    "Solvent_Name":           _v("solvent_name"),
+                    "Solvent_Volume_mL":      _v("solvent_volume_mL"),
+                    "Temperature_1_initial":  _v("temperature_initial_celsius"),
+                    "Temperature_final_Celsius": _v("temperature_final_celsius"),
+                    "Reaction_Time_min":      _v("reaction_time_min"),
                     "Product_ID":             prod_id,
                     "Product_Name":           prod_name,
-                    "Product_Mass_mg":        c.get("product_mass_mg", ""),
-                    "a:b_ratio":              c.get("a_b_ratio", ""),
-                    "Yield(%)":               c.get("yield_percent", ""),
+                    "Product_Mass_mg":        _v("product_mass_mg"),
+                    "a:b_ratio":              _v("a_b_ratio"),
+                    "Yield(%)":               _v("yield_percent"),
                     "Step":                   step_num,
-                    "Comments":              c.get("comments", ""),
+                    "Comments":               _v("comments"),
                 })
 
     if not solution_rows and not solid_rows:

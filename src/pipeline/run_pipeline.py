@@ -36,6 +36,7 @@ from src.pipeline.validate_and_normalize     import check_completeness, validate
 from src.pipeline.fill_missing_fields        import fill_scheme_missing_fields, fill_missing_fields
 from src.pipeline.assign_roles               import assign_roles
 from src.pipeline.retrieve_supporting_chunks import retrieve_supporting_chunks
+from src.pipeline.run_si_extraction          import run_si_extraction
 from src.pipeline.save_outputs               import post_process_and_save, save_outputs
 from src.utils.logging_utils                 import get_logger
 
@@ -86,6 +87,8 @@ def run_pipeline(paper: Paper) -> tuple:
             completeness_reports = [],
             unified              = unified,
             id_dict              = id_dict,
+            doi                  = paper.doi or "",
+            si_data              = {},
         )
         return [], saved_paths
 
@@ -126,7 +129,12 @@ def run_pipeline(paper: Paper) -> tuple:
             scheme_extractions, completeness_reports, text_org, id_dict
         )
 
-    # ── 7. Post-processing & Provenance [Module 7] ────────────────────────────
+    # ── 7a. SI Experimental Extraction [Module 2.04] ─────────────────────────
+    # Reads SI text (if available) to fill masses, mmol, volumes, SMILES
+    # for each product compound. Results merged into CSV rows by save_outputs.
+    si_data = run_si_extraction(documents, scheme_extractions)
+
+    # ── 7b. Post-processing & Provenance [Module 7] ───────────────────────────
     saved_paths = post_process_and_save(
         paper_id             = paper.paper_id,
         fill_results         = fill_results,
@@ -134,6 +142,8 @@ def run_pipeline(paper: Paper) -> tuple:
         completeness_reports = completeness_reports,
         unified              = unified,
         id_dict              = id_dict,
+        doi                  = paper.doi or "",
+        si_data              = si_data,
     )
 
     logger.info(
