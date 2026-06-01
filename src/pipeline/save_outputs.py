@@ -329,7 +329,18 @@ def export_to_csv(
             prod_name  = _cname("product")
 
             if phase == "solid":
-                c = step.get("solid_conditions", {}) or {}
+                c = step.get("solid_conditions") or {}
+                if not c:
+                    # Fall back: Module 7 may have used a flat "conditions" key
+                    flat = step.get("conditions") or {}
+                    c = {
+                        "activator_name":        flat.get("promoter_or_activator", ""),
+                        "solvent_name":          flat.get("solvent", ""),
+                        "T1_celsius":            flat.get("temperature", ""),
+                        "t1_min":                flat.get("time", ""),
+                        "yield_percent":         flat.get("yield", ""),
+                        "a_b_ratio":             flat.get("stereoselectivity", ""),
+                    }
                 solid_rows.append({
                     "DOI":                   doi,
                     "Donor_ID":              donor_id,
@@ -357,7 +368,19 @@ def export_to_csv(
                     "Comments":              c.get("comments", ""),
                 })
             else:
-                c = step.get("solution_conditions", {}) or {}
+                c = step.get("solution_conditions") or {}
+                if not c:
+                    # Fall back: Module 7 may have used a flat "conditions" key
+                    flat = step.get("conditions") or {}
+                    c = {
+                        "activator_1_name":              flat.get("promoter_or_activator", ""),
+                        "solvent_name":                  flat.get("solvent", ""),
+                        "temperature_initial_celsius":   flat.get("temperature", ""),
+                        "temperature_final_celsius":     flat.get("temperature", ""),
+                        "reaction_time_min":             flat.get("time", ""),
+                        "yield_percent":                 flat.get("yield", ""),
+                        "a_b_ratio":                     flat.get("stereoselectivity", ""),
+                    }
                 solution_rows.append({
                     "DOI":                    doi,
                     "Donor_ID":               donor_id,
