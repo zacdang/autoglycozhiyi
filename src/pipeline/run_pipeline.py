@@ -134,6 +134,14 @@ def run_pipeline(paper: Paper) -> tuple:
     # for each product compound. Results merged into CSV rows by save_outputs.
     si_data = run_si_extraction(documents, scheme_extractions)
 
+    # Save SI data to intermediate dir for reuse / debugging
+    if si_data:
+        from src.utils.json_utils import save_json
+        from configs import settings as _s
+        si_data_path = Path(_s.INTERMEDIATE_DIR) / f"{paper.paper_id}_si_data.json"
+        save_json(si_data, si_data_path)
+        logger.info(f"SI data saved → {si_data_path}")
+
     # ── 7b. Post-processing & Provenance [Module 7] ───────────────────────────
     saved_paths = post_process_and_save(
         paper_id             = paper.paper_id,

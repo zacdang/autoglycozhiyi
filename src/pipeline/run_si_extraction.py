@@ -149,57 +149,86 @@ def _extract_with_llm(si_text: str, product_ids: set, paper_id: str) -> dict:
     """
     Send SI text + product ID list to GPT-4o and parse the result.
 
-    The SI text is chunked if > 80 000 chars so we stay within context limits.
-    For very large SIs we run multiple calls (one chunk per call) and merge.
+    Strategy:
+    - Split SI into 60k-char chunks (safe for context window)
+    - Send each chunk independently; failures per chunk are skipped, not fatal
+    - Within each chunk, ask for at most 10 compound IDs to keep responses short
+    - Use max_tokens=8192 to avoid truncated JSON
     """
     prompt_template = _load_prompt_template()
     if not prompt_template:
         return {}
 
-    ids_str = ", ".join(sorted(product_ids))
-    system_prompt = prompt_template.replace("{PRODUCT_IDS}", ids_str)
+    CHUNK_SIZE   = 60_000   # chars per SI chunk (~15k tokens, leaves room for response)
+    BATCH_SIZE   = 10       # compound IDs per request (keeps JSON response manageable)
+    MAX_TOKENS   = 8192     # enough for ~10 compounds with full data
 
-    # GPT-4o context is ~128k tokens; 80k chars ≈ 20k tokens, safe for SI + prompt.
-    CHUNK_SIZE = 80_000
     chunks = [si_text[i:i + CHUNK_SIZE] for i in range(0, len(si_text), CHUNK_SIZE)]
+    id_list = sorted(product_ids)
+    id_batches = [id_list[i:i + BATCH_SIZE] for i in range(0, len(id_list), BATCH_SIZE)]
+
     logger.info(
-        f"[run_si_extraction] SI text {len(si_text)} chars → {len(chunks)} chunk(s)"
+        f"[run_si_extraction] SI text {len(si_text)} chars → "
+        f"{len(chunks)} chunk(s) × {len(id_batches)} ID batch(es) "
+        f"= {len(chunks) * len(id_batches)} total calls"
     )
 
     merged: dict = {}
+
     try:
         from openai import OpenAI
         client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
         for chunk_idx, chunk in enumerate(chunks):
-            user_content = (
-                f"SI Text (part {chunk_idx + 1} of {len(chunks)}):\n\n{chunk}\n\n"
-                "Return a JSON object mapping each found product_id to its "
-                "experimental data as specified. Return only JSON."
-            )
+            for batch_idx, id_batch in enumerate(id_batches):
+                ids_str = ", ".join(id_batch)
+                system_prompt = prompt_template.replace("{PRODUCT_IDS}", ids_str)
 
-            resp = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": user_content},
-                ],
-                response_format={"type": "json_object"},
-                max_tokens=4096,
-            )
+                user_content = (
+                    f"SI Text (part {chunk_idx + 1} of {len(chunks)}):\n\n{chunk}\n\n"
+                    "Return a JSON object mapping each found product_id to its "
+                    "experimental data. Only include compounds whose synthesis "
+                    "paragraph you can find in this text chunk. Return only JSON."
+                )
 
-            raw    = resp.choices[0].message.content
-            result = json.loads(raw)
+                try:
+                    resp = client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user",   "content": user_content},
+                        ],
+                        response_format={"type": "json_object"},
+                        max_tokens=MAX_TOKENS,
+                    )
+                    raw    = resp.choices[0].message.content
+                    result = json.loads(raw)
 
-            # Merge: later chunks can add more compounds or fill nulls
-            for cid, data in result.items():
-                if cid not in merged:
-                    merged[cid] = data
-                else:
-                    # Fill any null fields from this chunk
-                    for k, v in data.items():
-                        if v is not None and merged[cid].get(k) is None:
-                            merged[cid][k] = v
+                    # Merge: later chunks fill nulls, don't overwrite found data
+                    for cid, data in result.items():
+                        if not isinstance(data, dict):
+                            continue
+                        if cid not in merged:
+                            merged[cid] = data
+                        else:
+                            for k, v in data.items():
+                                if v is not None and merged[cid].get(k) is None:
+                                    merged[cid][k] = v
+
+                    found_this = [c for c in id_batch if c in result and
+                                  any(v is not None for v in result[c].values())]
+                    if found_this:
+                        logger.info(
+                            f"[run_si_extraction] chunk {chunk_idx+1}, "
+                            f"batch {batch_idx+1}: found {found_this}"
+                        )
+
+                except Exception as chunk_exc:
+                    logger.warning(
+                        f"[run_si_extraction] chunk {chunk_idx+1} batch {batch_idx+1} "
+                        f"failed: {chunk_exc} — skipping"
+                    )
+                    continue
 
         found = [cid for cid, d in merged.items()
                  if any(v is not None for v in d.values())]
@@ -210,5 +239,5 @@ def _extract_with_llm(si_text: str, product_ids: set, paper_id: str) -> dict:
         return merged
 
     except Exception as exc:
-        logger.warning(f"[run_si_extraction] LLM call failed for {paper_id}: {exc}")
+        logger.warning(f"[run_si_extraction] SI extraction failed for {paper_id}: {exc}")
         return {}

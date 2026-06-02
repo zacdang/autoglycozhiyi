@@ -501,6 +501,16 @@ def _write_excel(
     wb.save(path)
 
 
+def _safe_cell_value(v) -> str:
+    """Strip XML-illegal control characters so openpyxl never raises IllegalCharacterError."""
+    import re
+    if v is None:
+        return ""
+    s = str(v)
+    # Remove chars that are illegal in XML 1.0 (openpyxl uses XML internally)
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", s)
+
+
 def _fill_sheet(ws, columns: List[str], rows: List[dict]) -> None:
     """Write headers + rows into a worksheet with basic formatting."""
     try:
@@ -521,7 +531,8 @@ def _fill_sheet(ws, columns: List[str], rows: List[dict]) -> None:
         # Write data rows
         for row_idx, row_data in enumerate(rows, start=2):
             for col_idx, col_name in enumerate(columns, start=1):
-                ws.cell(row=row_idx, column=col_idx, value=row_data.get(col_name, ""))
+                ws.cell(row=row_idx, column=col_idx,
+                        value=_safe_cell_value(row_data.get(col_name, "")))
 
         # Auto-fit column widths (approximate)
         for col_idx, col_name in enumerate(columns, start=1):
@@ -540,7 +551,8 @@ def _fill_sheet(ws, columns: List[str], rows: List[dict]) -> None:
             ws.cell(row=1, column=col_idx, value=col_name)
         for row_idx, row_data in enumerate(rows, start=2):
             for col_idx, col_name in enumerate(columns, start=1):
-                ws.cell(row=row_idx, column=col_idx, value=row_data.get(col_name, ""))
+                ws.cell(row=row_idx, column=col_idx,
+                        value=_safe_cell_value(row_data.get(col_name, "")))
 
 
 # ── Legacy path (ReactionRecord) ─────────────────────────────────────────────
