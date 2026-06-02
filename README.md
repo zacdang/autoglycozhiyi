@@ -1,24 +1,69 @@
 # autoglyco
 
-A modular Python pipeline for automated extraction of glycosylation reaction
-data from scientific papers using **MERMaid** (multimodal PDF/figure extraction)
-and **ChemDataExtractor** (chemistry-aware text parsing).
+An automated pipeline for extracting structured glycosylation reaction data from
+carbohydrate chemistry papers. Given a paper PDF (and optionally its Supporting
+Information), the pipeline produces a fully-populated CSV/Excel file matching a
+standardised reaction data template — ready for database ingestion.
 
 ---
 
-## Why wrap MERMaid and ChemDataExtractor?
+## How it works
 
-Both tools have their own interfaces, output formats, and installation quirks.
-Calling them directly throughout the codebase would make it hard to:
-
-- **Swap one tool out** without touching every file that uses it.
-- **Test the rest of the pipeline** when a tool is not installed.
-- **Add chemistry-specific logic** (donor/acceptor assignment, identifier
-  resolution, validation) on top of generic extraction output.
-
-This project wraps each tool behind a clean Python adapter with a **mock mode**
-so the entire pipeline can run — and be tested — using bundled sample data,
-with no external tools installed.
+```
+PDF + SI PDF
+    │
+    ▼
+┌─────────────────────────────────────────────────┐
+│  Shared Input Layer  (load_documents.py)         │
+│  • pdfplumber text extraction (main + SI)        │
+│  • auto-download missing PDFs via Unpaywall API  │
+└──────────────────────┬──────────────────────────┘
+                       │
+          ┌────────────┼────────────┐
+          ▼            ▼            ▼
+   Phase classifier  Text org   Identifier dict
+   (GPT-4o)         (GPT-4o    (GPT-4o resolves
+                    Module 2.01) compound labels
+                                 Module 2.02)
+          │
+          ▼
+┌─────────────────────────────────────────────────┐
+│  MERMaid  (VisualHeist + DataRaider)             │
+│  • Florence-2 extracts figures from PDF pages   │
+│  • GPT-4o vision reads each figure image        │
+└──────────────────────┬──────────────────────────┘
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+  Figure relevance check     SI experimental extraction
+  (GPT-4o vision             (GPT-4o reads SI text,
+   Module 2.03)               extracts masses/mmol/
+                               SMILES per compound
+                               Module 2.04)
+          │
+          ▼
+┌─────────────────────────────────────────────────┐
+│  Primary Figure Extraction  (Module 3)           │
+│  GPT-4o vision: donor + acceptor + product IDs, │
+│  reaction conditions (solvent, temp, time, yield)│
+└──────────────────────┬──────────────────────────┘
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+  Completeness check           Fill missing fields
+  (GPT-4o Module 4)            (GPT-4o Module 5)
+          └────────────┬────────────┘
+                       │  (iterates up to 2×)
+                       ▼
+┌─────────────────────────────────────────────────┐
+│  Post-processing & Provenance  (Module 6)        │
+│  GPT-4o standardises field names, marks sources │
+└──────────────────────┬──────────────────────────┘
+                       │
+                       ▼
+         solution_PAPER.csv / solid_PAPER.csv
+                  test.xlsx (both tabs)
+```
 
 ---
 
@@ -28,192 +73,174 @@ with no external tools installed.
 autoglyco/
 ├── README.md
 ├── requirements.txt
-├── .env.example                 ← copy to .env and edit
+├── .env.example                    ← copy to .env and add your API key
 ├── configs/
-│   ├── settings.py              ← all config loaded from .env
-│   ├── schema.json              ← JSON schema for a reaction record
-│   └── prompts/
-│       ├── classify_figure.txt  ← prompt template (future LLM use)
-│       ├── fill_missing_fields.txt
-│       └── validate_record.txt
+│   ├── settings.py                 ← all config loaded from .env
+│   ├── schema.json
+│   └── prompts/                    ← GPT-4o prompt templates (Modules 2–6)
+│       ├── 01_input_preparation.md
+│       ├── 02_01_text_organization.md
+│       ├── 02_02_si_dictionary.md
+│       ├── 02_03_Synthesis-related Figure Check.md
+│       ├── 02_04_si_experimental.md
+│       ├── 03_Primary Figure-based Extraction.md
+│       ├── 04_Completeness Check.md
+│       ├── 05_Fill Missing Fields.md
+│       └── 06_Post-processing & Provenance.md
 ├── data/
-│   ├── raw/papers/              ← input PDFs
-│   ├── raw/si/                  ← supplementary information PDFs
-│   ├── mermaid_outputs/         ← raw MERMaid JSON (auto-created)
-│   ├── cde_outputs/             ← raw CDE JSON (auto-created)
-│   ├── intermediate/            ← merged data, reports (auto-created)
-│   ├── outputs/                 ← final reaction JSONs (auto-created)
-│   └── samples/                 ← bundled mock data for development
+│   ├── raw/papers/                 ← input PDFs (main article + SI)
+│   ├── mermaid_outputs/            ← VisualHeist PNGs + DataRaider JSON
+│   ├── intermediate/               ← merged data, completeness reports, SI data
+│   ├── outputs/                    ← final CSV, Excel, scheme JSON, provenance
+│   └── samples/                    ← bundled mock data for development/testing
 │       ├── sample_paper_metadata.json
 │       ├── sample_mermaid_output.json
-│       ├── sample_cde_output.json
 │       └── sample_final_output.json
 ├── src/
-│   ├── main.py                  ← CLI entry point
+│   ├── main.py                     ← CLI entry point
 │   ├── adapters/
-│   │   ├── mermaid_adapter.py       ← MERMaid wrapper (mock + real placeholder)
-│   │   └── chemdataextractor_adapter.py  ← CDE wrapper (mock + real placeholder)
+│   │   ├── mermaid_adapter.py      ← VisualHeist + DataRaider integration
+│   │   └── chemdataextractor_adapter.py
 │   ├── models/
-│   │   ├── paper.py             ← Paper dataclass
-│   │   ├── figure.py            ← Figure dataclass
-│   │   ├── chunk.py             ← Chunk dataclass
-│   │   ├── identifier.py        ← Identifier dataclass
-│   │   └── reaction_record.py   ← ReactionRecord + completeness scoring
+│   │   ├── paper.py
+│   │   ├── reaction_record.py
+│   │   └── ...
 │   ├── pipeline/
-│   │   ├── register_papers.py           ← Step 1: load paper metadata
-│   │   ├── run_mermaid.py               ← Step 2: MERMaid extraction
-│   │   ├── run_chemdataextractor.py     ← Step 3: CDE parsing
-│   │   ├── merge_extractions.py         ← Step 4: unify outputs
-│   │   ├── classify_relevant_figures.py ← Step 5: keyword-based filtering
-│   │   ├── build_identifier_dictionary.py← Step 6: label → name mapping
-│   │   ├── assign_roles.py              ← Step 7: donor/acceptor/product
-│   │   ├── retrieve_supporting_chunks.py← Step 8: find evidence for NR fields
-│   │   ├── fill_missing_fields.py       ← Step 9: regex fill + TODO LLM
-│   │   ├── validate_and_normalize.py    ← Step 10: sanity check + scoring
-│   │   ├── save_outputs.py              ← Step 11: write JSONs
-│   │   └── run_pipeline.py              ← Step 12: orchestrator
+│   │   ├── load_documents.py           ← Shared input layer (pdfplumber)
+│   │   ├── classify_phase.py           ← solution vs solid phase (GPT-4o)
+│   │   ├── run_mermaid.py              ← MERMaid orchestration
+│   │   ├── run_text_organisation.py    ← Module 2.01 (GPT-4o)
+│   │   ├── run_identifier_dictionary.py← Module 2.02 (GPT-4o)
+│   │   ├── classify_relevant_figures.py← Module 2.03 (GPT-4o vision)
+│   │   ├── run_si_extraction.py        ← Module 2.04 — masses/mmol from SI (GPT-4o)
+│   │   ├── run_figure_extraction.py    ← Module 3 — primary extraction (GPT-4o vision)
+│   │   ├── validate_and_normalize.py   ← Module 4 — completeness check (GPT-4o)
+│   │   ├── fill_missing_fields.py      ← Module 5 — fill gaps (GPT-4o)
+│   │   ├── save_outputs.py             ← Module 6 + CSV/Excel export
+│   │   ├── run_pipeline.py             ← orchestrator
+│   │   └── register_papers.py
 │   └── utils/
-│       ├── file_utils.py
-│       ├── json_utils.py
+│       ├── download_papers.py      ← auto-download PDFs via Unpaywall
 │       ├── logging_utils.py
-│       └── text_utils.py            ← keywords, normalization, regex helpers
+│       ├── json_utils.py
+│       └── text_utils.py
 └── tests/
-    ├── test_schema.py           ← validates configs/schema.json
-    └── test_pipeline_smoke.py   ← end-to-end mock pipeline test
+    ├── test_schema.py
+    └── test_pipeline_smoke.py
 ```
 
 ---
 
-## What each pipeline step does
+## Quick start
 
-| Step | Module | Purpose |
-|------|--------|---------|
-| 1 | `register_papers.py` | Load paper metadata (title, DOI, PDF paths) from JSON |
-| 2 | `run_mermaid.py` | Extract figures, tables, text blocks via MERMaid adapter |
-| 3 | `run_chemdataextractor.py` | Parse chemical names and conditions via CDE adapter |
-| 4 | `merge_extractions.py` | Combine both outputs into one unified internal dict |
-| 5 | `classify_relevant_figures.py` | Score figures by glycosylation keyword presence |
-| 6 | `build_identifier_dictionary.py` | Map labels like "3a" to chemical names/descriptions |
-| 7 | `assign_roles.py` | Assign donor / acceptor / product from figure + id_dict |
-| 8 | `retrieve_supporting_chunks.py` | Find best text chunks for each NR field |
-| 9 | `fill_missing_fields.py` | Fill NR fields using regex; TODO LLM hooks included |
-| 10 | `validate_and_normalize.py` | Expand abbreviations, check plausibility, score record |
-| 11 | `save_outputs.py` | Write final + intermediate + unresolved + report JSON |
-| 12 | `run_pipeline.py` | Orchestrate steps 1–11 for one paper |
+### Requirements
 
----
+- Python 3.9+
+- An OpenAI API key (GPT-4o)
+- MERMaid installed (VisualHeist + DataRaider) for real figure extraction
 
-## Quick start (mock mode — no external tools needed)
+### Setup
 
 ```bash
-# 1. Clone / download the project
+git clone https://github.com/shixuanleong/autoglyco.git
 cd autoglyco
 
-# 2. Create and activate a virtual environment
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+source .venv/bin/activate       # Windows: .venv\Scripts\activate
 
-# 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Copy the example env file
 cp .env.example .env
-# Leave PIPELINE_MODE=mock (the default)
-
-# 5. Run the pipeline
-python -m src.main
-
-# The final reaction JSON will be written to:
-#   data/outputs/PAPER_001_final.json
+# Edit .env and set:
+#   OPENAI_API_KEY=sk-...
+#   PIPELINE_MODE=real
 ```
 
----
+### Add a paper
 
-## Running the tests
-
-```bash
-pytest tests/ -v
-```
-
-Both tests run in mock mode and do not require MERMaid or CDE to be installed.
-
----
-
-## How to add a real paper
-
-1. Put your paper PDF in `data/raw/papers/` and SI PDF in `data/raw/si/`.
+1. Put the paper PDF in `data/raw/papers/`
 2. Add an entry to `data/samples/sample_paper_metadata.json`:
 
 ```json
 {
-  "paper_id": "PAPER_002",
-  "title":    "Your paper title",
+  "paper_id": "MY_PAPER_2024",
+  "title":    "Paper title",
   "doi":      "10.xxxx/...",
   "year":     2024,
-  "pdf_path": "data/raw/papers/paper_002.pdf",
-  "si_path":  "data/raw/si/paper_002_si.pdf"
+  "pdf_path": "data/raw/papers/my_paper.pdf",
+  "si_path":  "data/raw/papers/my_paper_SI.pdf"
 }
 ```
 
-3. In mock mode, the pipeline will still use the bundled sample extractions.
-   To use real extractions, follow the sections below.
+3. Run:
+
+```bash
+PIPELINE_MODE=real python -m src.main --paper MY_PAPER_2024
+```
+
+The pipeline will auto-detect if the SI PDF is missing and print the exact
+download link if it cannot be fetched automatically.
+
+### Mock mode (no API key needed)
+
+```bash
+# Leave PIPELINE_MODE=mock in .env (the default)
+python -m src.main
+```
+
+Uses bundled sample data — useful for testing the pipeline logic without
+making any API calls.
 
 ---
 
-## Replacing the mock with real MERMaid
-
-Open `src/adapters/mermaid_adapter.py` and implement `_run_real()`.
-The skeleton is already there with comments showing exactly what to fill in.
-
-1. Install MERMaid following its own documentation.
-2. Set `MERMAID_CLI_PATH` in your `.env`.
-3. Set `PIPELINE_MODE=real` in your `.env`.
-4. Fill in the `subprocess.run()` call inside `_run_real()`.
-
----
-
-## Replacing the mock with real ChemDataExtractor
-
-Open `src/adapters/chemdataextractor_adapter.py` and implement `_parse_real()`.
-
-1. `pip install ChemDataExtractor2`
-2. Set `PIPELINE_MODE=real` in your `.env`.
-3. Implement the CDE Document loading code in `_parse_real()` (the skeleton
-   is already provided in the comments).
-
----
-
-## Adding LLM-based filling (future)
-
-The pipeline has `# TODO` markers in two places where an LLM call can be added:
-
-- `src/pipeline/classify_relevant_figures.py` — use `configs/prompts/classify_figure.txt`
-- `src/pipeline/fill_missing_fields.py` — use `configs/prompts/fill_missing_fields.txt`
-- `src/pipeline/validate_and_normalize.py` — use `configs/prompts/validate_record.txt`
-
-No LangChain or agent framework is required — a simple `anthropic` or `openai`
-API call is sufficient.
-
----
-
-## Output files
+## Outputs
 
 | File | Description |
 |------|-------------|
-| `data/outputs/{paper_id}_final.json` | Final structured reaction record |
-| `data/intermediate/{paper_id}_merged.json` | Unified MERMaid + CDE extraction |
-| `data/intermediate/{paper_id}_unresolved_ids.json` | Labels that could not be named |
-| `data/intermediate/{paper_id}_report.json` | Completeness score and provenance |
+| `data/outputs/{paper_id}_solution.csv` | Extracted solution-phase reactions, 30 columns |
+| `data/outputs/{paper_id}_solid.csv` | Extracted solid-phase reactions, 24 columns |
+| `data/outputs/test.xlsx` | Both tabs (Solution + Solid) in one styled Excel file |
+| `data/outputs/{paper_id}_schemes.json` | Full structured extraction per figure |
+| `data/outputs/{paper_id}_provenance.json` | Source tracking (figure/SI/text) per scheme |
+| `data/intermediate/{paper_id}_si_data.json` | Raw SI experimental quantities per compound |
+
+### CSV columns (solution phase)
+
+`DOI`, `Donor_ID`, `Donor_Name`, `Donor_SMILES`, `Donor_Mass_mg`, `Donor_mmol`,
+`Acceptor_ID`, `Acceptor_Name`, `Acceptor_SMILES`, `Acceptor_Mass_mg`, `Acceptor_mmol`,
+`Equiv.`, `Activator_1`, `Activator_1_Mass_mg`, `Activator_1_mmol`,
+`Activator_2`, `Activator_2_Volume_uL`, `Activator_2_mmol`,
+`Solvent_Name`, `Solvent_Volume_mL`, `Temperature_1_initial`, `Temperature_final_Celsius`,
+`Reaction_Time_min`, `Product_ID`, `Product_Name`, `Product_Mass_mg`,
+`a:b_ratio`, `Yield(%)`, `Step`, `Comments`
+
+**Data sources per column:**
+- Compound IDs, names, conditions (solvent/temp/time/yield/activator) → extracted from scheme figures via GPT-4o vision
+- Masses (mg), mmol, exact volumes → extracted from SI experimental procedures via GPT-4o text
+- SMILES → from SI text if explicitly written; otherwise null
 
 ---
 
-## Adding more papers to the metadata file
+## Pipeline modules
 
-The paper metadata file is just a JSON array. Add as many entries as you like —
-the pipeline will process them one by one when you run `python -m src.main`.
+| Module | File | What it does |
+|--------|------|-------------|
+| Shared Input | `load_documents.py` | Extract text from PDF + SI with pdfplumber; auto-download missing PDFs |
+| Phase classifier | `classify_phase.py` | Classify solution-phase vs solid-phase using GPT-4o |
+| MERMaid | `mermaid_adapter.py` | Run VisualHeist (figure → PNG) + DataRaider (PNG → structured JSON) |
+| 2.01 Text org | `run_text_organisation.py` | Organise main text into sections (GPT-4o) |
+| 2.02 ID dict | `run_identifier_dictionary.py` | Resolve compound labels to names (GPT-4o) |
+| 2.03 Fig check | `classify_relevant_figures.py` | Decide which figures are synthesis schemes (GPT-4o vision) |
+| 2.04 SI extract | `run_si_extraction.py` | Extract masses/mmol from SI experimental section (GPT-4o) |
+| 3 Fig extraction | `run_figure_extraction.py` | Extract donor/acceptor/product/conditions per scheme (GPT-4o vision) |
+| 4 Completeness | `validate_and_normalize.py` | Check which fields are missing (GPT-4o) |
+| 5 Fill fields | `fill_missing_fields.py` | Fill gaps using text context (GPT-4o) |
+| 6 Post-process | `save_outputs.py` | Standardise, track provenance, export CSV + Excel |
 
-To process only one paper:
+---
+
+## Running tests
 
 ```bash
-python -m src.main --paper PAPER_002
+pytest tests/ -v
 ```
