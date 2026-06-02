@@ -1,5 +1,5 @@
 """
-Entry point for the glyco_mermaid_wrapper pipeline.
+Entry point for the autoglyco pipeline.
 
 Usage
 -----

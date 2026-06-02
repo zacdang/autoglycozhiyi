@@ -1,1 +1,1 @@
-# glyco_mermaid_wrapper source package
+# autoglyco source package

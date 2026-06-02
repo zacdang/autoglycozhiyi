@@ -1,4 +1,4 @@
-# glyco_mermaid_wrapper
+# autoglyco
 
 A modular Python pipeline for automated extraction of glycosylation reaction
 data from scientific papers using **MERMaid** (multimodal PDF/figure extraction)
@@ -25,7 +25,7 @@ with no external tools installed.
 ## Project structure
 
 ```
-glyco_mermaid_wrapper/
+autoglyco/
 ├── README.md
 ├── requirements.txt
 ├── .env.example                 ← copy to .env and edit
@@ -107,7 +107,7 @@ glyco_mermaid_wrapper/
 
 ```bash
 # 1. Clone / download the project
-cd glyco_mermaid_wrapper
+cd autoglyco
 
 # 2. Create and activate a virtual environment
 python -m venv .venv
