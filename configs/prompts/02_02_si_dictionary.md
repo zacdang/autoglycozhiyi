@@ -3,37 +3,29 @@
 ## Prompt
 
 ```text
-You will extract all compound name–ID pairings from a carbohydrate synthesis paper.
+You are an expert in chemistry literature. Extract all compound number–name pairings from a carbohydrate synthesis paper.
 
 Input
 - Main Article
 - Supporting Information
 
-For each verified compound, extract:
-- compound_id
-- compound_name
-- evidence_text
+For each compound, extract:
+- compound_id  (the number or label used in the paper, e.g. "9", "43", "S2")
+- compound_name (the IUPAC or descriptive name)
+- evidence_text (a short snippet showing where you found this)
 
-Verification rule
-Include a compound in Verified compounds when the compound ID and its name appear together in any of the following ways:
+How to find pairings
+Different journals format SI documents differently. Use your chemistry knowledge to recognise compound name–ID pairings in ANY of these formats and any other format you encounter:
 
-Accepted direct-pair formats include:
-- Full compound name (ID)
-- ID. Full compound name
-- Compound ID: Full compound name
-- SI section heading "Compound ID" or just the number as a heading, followed by the IUPAC name in the first sentence of the paragraph below it
-- Characterization paragraph where the heading is the compound number and the opening sentence contains the compound name (e.g. "9. Methyl 2,3,4-tri-O-acetyl-α-D-glucopyranoside (compound 9) was obtained...")
-- Any sentence where a compound number and a chemical name appear in the same sentence or adjacent sentences
+- "IUPAC name (9)" — name as a section heading with compound number in parentheses at the end
+- "9. IUPAC name" — number then name
+- "Compound 9: IUPAC name" — explicit label
+- "Compound 9 (IUPAC name)" — inline
+- A section heading that is just "9" or "Compound 9", followed by the IUPAC name in the first line of the paragraph below
+- A synthesis procedure that ends with "...to give compound 9 (IUPAC name)..."
+- Any sentence or adjacent sentences where a compound number and a chemical name appear close together
 
-Accepted evidence locations include:
-- scheme labels
-- figure labels
-- captions
-- reaction annotations
-- SI headings/titles
-- characterization entries
-- experimental subheadings
-- NMR data paragraphs (the heading number + the name in the opening line)
+The format varies by journal. Do not restrict yourself to any single format. Use context and chemical reasoning to identify the pairing.
 
 Do not:
 - infer names from drawn structures
@@ -120,22 +112,9 @@ For mentioned IDs that cannot be verified as direct compound name–ID pairings,
 
 ## Rules / Notes
 
-- Include a compound in `Verified compounds` when its ID and name appear together in any accepted format.
-- Accepted direct-pair formats include:
-  - `Full compound name (ID)`
-  - `ID. Full compound name`
-  - `Compound ID: Full compound name`
-  - SI section heading that is just the compound number, with the IUPAC name in the first sentence of the paragraph below
-  - Any sentence where a compound number and a chemical name appear together
-- Accepted evidence locations include:
-  - scheme labels
-  - figure labels
-  - captions
-  - reaction annotations
-  - SI headings / titles
-  - characterization entries
-  - experimental subheadings
-  - NMR data paragraphs (heading number + name in opening line)
+- Use your chemistry expertise to find compound number–name pairings in any format — do not restrict to a fixed list of formats.
+- Different journals format SI files differently; be flexible.
+- Accepted evidence locations include anywhere in the text: headings, captions, synthesis procedures, characterization paragraphs, NMR data sections, scheme labels.
 - Do not infer compound names from drawn structures.
 - Do not invent names.
 - Do not expand abbreviations unless explicitly written.

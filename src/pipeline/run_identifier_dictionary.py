@@ -117,6 +117,51 @@ def run_identifier_dictionary(documents: dict, text_org: dict) -> dict:
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
+def _join_wrapped_lines(text: str) -> str:
+    """
+    Join lines that were wrapped by the PDF extractor so that compound
+    headings like:
+
+        5-(tert-Butyl)-2-methylphenyl-2,3-di-O-benzoyl-\n
+        butyldiphenylsilyl-1-thio-β-D-galactofuranoside (10)
+
+    become a single line. Rules:
+    - If a line ends with a hyphen, join directly to the next line (word-wrap)
+    - If a line ends without sentence-ending punctuation (., ?, !)
+      AND the next line starts with a lowercase letter or '(' → join with a space
+    Blank lines (paragraph separators) are always preserved.
+    """
+    import re
+    lines = text.split("\n")
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # Preserve blank lines as paragraph separators
+        if not line.strip():
+            out.append(line)
+            i += 1
+            continue
+        # Look ahead and decide whether to join
+        while i + 1 < len(lines):
+            next_line = lines[i + 1]
+            if not next_line.strip():
+                break   # blank line → stop joining
+            if line.rstrip().endswith("-"):
+                # Hard hyphen wrap — keep the hyphen, it's part of the chemical name
+                line = line.rstrip() + next_line.lstrip()
+                i += 1
+            elif not re.search(r'[.!?]\s*$', line.rstrip()) and re.match(r'^[a-z\(]', next_line.lstrip()):
+                # Soft wrap — join with space
+                line = line.rstrip() + " " + next_line.lstrip()
+                i += 1
+            else:
+                break
+        out.append(line)
+        i += 1
+    return "\n".join(out)
+
+
 def _extract_with_llm(main_text: str, si_text: str, paper_id: str) -> dict:
     """
     Extract all compound name-ID pairs by chunking the SI by paragraph and
@@ -132,6 +177,9 @@ def _extract_with_llm(main_text: str, si_text: str, paper_id: str) -> dict:
     system_prompt = _load_system_prompt()
     if not system_prompt:
         return {}
+
+    # Fix wrapped lines before chunking
+    si_text = _join_wrapped_lines(si_text)
 
     # Split SI into paragraph-aware chunks (~60k chars each)
     SI_CHUNK_SIZE = 60_000
@@ -185,8 +233,16 @@ def _extract_with_llm(main_text: str, si_text: str, paper_id: str) -> dict:
 
                 for entry in result.get("verified_compounds", []):
                     cid = str(entry.get("compound_id", "")).strip()
-                    if cid and cid not in all_verified:
+                    if not cid:
+                        continue
+                    new_name = entry.get("compound_name", "")
+                    if cid not in all_verified:
                         all_verified[cid] = entry
+                    else:
+                        # Prefer the longer/more specific name (IUPAC > short label)
+                        existing_name = all_verified[cid].get("compound_name", "")
+                        if len(new_name) > len(existing_name):
+                            all_verified[cid] = entry
 
                 for entry in result.get("unresolved_mentions", []):
                     cid = str(entry.get("compound_id", "")).strip()
