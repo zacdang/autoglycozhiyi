@@ -151,7 +151,22 @@ def _extract_one_figure(
             response_format={"type": "json_object"},
             max_tokens=4096,
         )
-        raw    = resp.choices[0].message.content
+        finish_reason = resp.choices[0].finish_reason
+        raw = resp.choices[0].message.content
+
+        if raw is None:
+            logger.warning(
+                f"[run_figure_extraction] {figure_id}: GPT-4o returned None content "
+                f"(finish_reason={finish_reason}). Retrying without json_object mode."
+            )
+            return _extract_one_figure_plaintext(figure_id, content)
+
+        if finish_reason == "length":
+            logger.warning(
+                f"[run_figure_extraction] {figure_id}: response truncated (max_tokens). "
+                f"Attempting to parse partial JSON."
+            )
+
         result = json.loads(raw)
 
         steps = result.get("step_analysis", {}).get("scheme_steps_count", 0)
@@ -164,6 +179,50 @@ def _extract_one_figure(
 
     except Exception as exc:
         logger.warning(f"[run_figure_extraction] LLM call failed for {figure_id}: {exc}")
+        return {}
+
+
+def _extract_one_figure_plaintext(figure_id: str, content: list) -> dict:
+    """
+    Fallback when json_object mode returns None.
+    Ask GPT-4o to return plain text, then wrap result in minimal structure.
+    """
+    try:
+        from openai import OpenAI
+        from configs import settings
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+        fallback_instruction = (
+            "Return a JSON object with keys 'reaction_paths' and 'step_analysis'. "
+            "reaction_paths is a list of {path: string}. "
+            "step_analysis has keys: phase (solution or solid), scheme_steps_count (int), "
+            "reaction_steps (list of steps with donor, acceptor, product compound IDs "
+            "and solution_conditions), notes (string)."
+        )
+        # Replace the first text item with the fallback instruction appended
+        new_content = list(content)
+        if new_content and new_content[0].get("type") == "text":
+            new_content[0] = {
+                "type": "text",
+                "text": new_content[0]["text"] + "\n\n" + fallback_instruction,
+            }
+
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": new_content}],
+            max_tokens=8192,
+        )
+        raw = resp.choices[0].message.content or ""
+        # Extract JSON block if wrapped in markdown
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0].strip()
+        result = json.loads(raw)
+        logger.info(f"[run_figure_extraction] {figure_id}: plaintext fallback succeeded")
+        return result
+    except Exception as exc:
+        logger.warning(f"[run_figure_extraction] {figure_id}: plaintext fallback also failed: {exc}")
         return {}
 
 
