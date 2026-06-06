@@ -135,12 +135,18 @@ def run_pipeline(paper: Paper) -> tuple:
     si_data = run_si_extraction(documents, scheme_extractions)
 
     # Save SI data to intermediate dir for reuse / debugging
+    from src.utils.json_utils import save_json
+    from configs import settings as _s
     if si_data:
-        from src.utils.json_utils import save_json
-        from configs import settings as _s
         si_data_path = Path(_s.INTERMEDIATE_DIR) / f"{paper.paper_id}_si_data.json"
         save_json(si_data, si_data_path)
         logger.info(f"SI data saved → {si_data_path}")
+
+    # Save resolved id_dict for quick re-runs / testing
+    if id_dict.get("resolved"):
+        id_dict_path = Path(_s.INTERMEDIATE_DIR) / f"{paper.paper_id}_id_dict.json"
+        save_json(id_dict, id_dict_path)
+        logger.info(f"ID dict saved → {id_dict_path}")
 
     # ── 7b. Post-processing & Provenance [Module 7] ───────────────────────────
     saved_paths = post_process_and_save(

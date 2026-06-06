@@ -131,7 +131,7 @@ def post_process_and_save(
     paths["completeness_reports"] = str(comp_path)
 
     # 6. CSV export — routed to solution or solid template based on phase
-    csv_path = export_to_csv(paper_id, final_schemes, output_dir, doi=doi, si_data=si_data or {})
+    csv_path = export_to_csv(paper_id, final_schemes, output_dir, doi=doi, si_data=si_data or {}, id_dict=id_dict)
     if csv_path:
         paths["csv_export"] = str(csv_path)
 
@@ -282,6 +282,7 @@ def export_to_csv(
     output_dir: Path,
     doi: str = "",
     si_data: Optional[dict] = None,
+    id_dict: Optional[dict] = None,
 ) -> Optional[Path]:
     """
     Export all glycosylation steps from final_schemes to a CSV file.
@@ -331,6 +332,19 @@ def export_to_csv(
             acc_name   = _cname("acceptor")
             prod_id    = _cid("product")
             prod_name  = _cname("product")
+
+            # ── Fall back to id_dict for any missing names ────────────────────
+            resolved = (id_dict or {}).get("resolved", {})
+            def _lookup_name(cid, name):
+                if name:
+                    return name
+                entry = resolved.get(str(cid)) or resolved.get(cid)
+                if entry:
+                    return entry.get("compound_name") or entry.get("possible_name") or ""
+                return ""
+            donor_name = _lookup_name(donor_id, donor_name)
+            acc_name   = _lookup_name(acc_id,   acc_name)
+            prod_name  = _lookup_name(prod_id,  prod_name)
 
             # ── SI data for this product (fills masses, mmol, SMILES) ─────────
             # si_data is keyed by product_id → experimental dict

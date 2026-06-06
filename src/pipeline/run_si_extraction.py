@@ -145,6 +145,37 @@ def _load_prompt_template() -> str:
         return ""
 
 
+def _chunk_by_paragraph(text: str, max_chars: int = 60_000) -> list:
+    """
+    Split SI text at paragraph boundaries (blank lines) so that a single
+    compound's procedure paragraph is never split across two chunks.
+
+    Each chunk is at most max_chars long. If a single paragraph exceeds
+    max_chars (very rare), it is included as its own oversized chunk rather
+    than being silently dropped.
+    """
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+
+    chunks = []
+    current = []
+    current_len = 0
+
+    for para in paragraphs:
+        para_len = len(para) + 2  # +2 for the "\n\n" separator we'll rejoin with
+        if current_len + para_len > max_chars and current:
+            # Flush current chunk before adding this paragraph
+            chunks.append("\n\n".join(current))
+            current = []
+            current_len = 0
+        current.append(para)
+        current_len += para_len
+
+    if current:
+        chunks.append("\n\n".join(current))
+
+    return chunks
+
+
 def _extract_with_llm(si_text: str, product_ids: set, paper_id: str) -> dict:
     """
     Send SI text + product ID list to GPT-4o and parse the result.
@@ -159,11 +190,11 @@ def _extract_with_llm(si_text: str, product_ids: set, paper_id: str) -> dict:
     if not prompt_template:
         return {}
 
-    CHUNK_SIZE   = 60_000   # chars per SI chunk (~15k tokens, leaves room for response)
+    CHUNK_SIZE   = 60_000   # max chars per chunk (safety cap)
     BATCH_SIZE   = 10       # compound IDs per request (keeps JSON response manageable)
     MAX_TOKENS   = 8192     # enough for ~10 compounds with full data
 
-    chunks = [si_text[i:i + CHUNK_SIZE] for i in range(0, len(si_text), CHUNK_SIZE)]
+    chunks = _chunk_by_paragraph(si_text, max_chars=CHUNK_SIZE)
     id_list = sorted(product_ids)
     id_batches = [id_list[i:i + BATCH_SIZE] for i in range(0, len(id_list), BATCH_SIZE)]
 
