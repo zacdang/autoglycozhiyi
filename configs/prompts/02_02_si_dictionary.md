@@ -15,12 +15,15 @@ For each verified compound, extract:
 - evidence_text
 
 Verification rule
-Include a compound in Verified compounds only when a full compound name is explicitly and directly paired with an ID.
+Include a compound in Verified compounds when the compound ID and its name appear together in any of the following ways:
 
 Accepted direct-pair formats include:
 - Full compound name (ID)
 - ID. Full compound name
 - Compound ID: Full compound name
+- SI section heading "Compound ID" or just the number as a heading, followed by the IUPAC name in the first sentence of the paragraph below it
+- Characterization paragraph where the heading is the compound number and the opening sentence contains the compound name (e.g. "9. Methyl 2,3,4-tri-O-acetyl-α-D-glucopyranoside (compound 9) was obtained...")
+- Any sentence where a compound number and a chemical name appear in the same sentence or adjacent sentences
 
 Accepted evidence locations include:
 - scheme labels
@@ -30,12 +33,12 @@ Accepted evidence locations include:
 - SI headings/titles
 - characterization entries
 - experimental subheadings
+- NMR data paragraphs (the heading number + the name in the opening line)
 
 Do not:
-- infer from structures
-- invent names
+- infer names from drawn structures
+- invent names not present in the text
 - expand abbreviations unless explicitly written
-- treat a numbered intermediate as verified without a direct full name–ID pairing
 
 Sorting
 Sort Verified compounds by compound_id:
@@ -117,11 +120,13 @@ For mentioned IDs that cannot be verified as direct compound name–ID pairings,
 
 ## Rules / Notes
 
-- Include a compound in `Verified compounds` only when a full compound name is explicitly and directly paired with an ID.
+- Include a compound in `Verified compounds` when its ID and name appear together in any accepted format.
 - Accepted direct-pair formats include:
   - `Full compound name (ID)`
   - `ID. Full compound name`
   - `Compound ID: Full compound name`
+  - SI section heading that is just the compound number, with the IUPAC name in the first sentence of the paragraph below
+  - Any sentence where a compound number and a chemical name appear together
 - Accepted evidence locations include:
   - scheme labels
   - figure labels
@@ -130,10 +135,10 @@ For mentioned IDs that cannot be verified as direct compound name–ID pairings,
   - SI headings / titles
   - characterization entries
   - experimental subheadings
-- Do not infer compound names from structures.
+  - NMR data paragraphs (heading number + name in opening line)
+- Do not infer compound names from drawn structures.
 - Do not invent names.
 - Do not expand abbreviations unless explicitly written.
-- Do not treat a numbered intermediate as verified without a direct full name–ID pairing.
 - Keep evidence text short.
 - Prefer SI title / header evidence when available.
 - Sort verified compounds by compound ID:

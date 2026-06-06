@@ -119,9 +119,11 @@ def run_identifier_dictionary(documents: dict, text_org: dict) -> dict:
 
 def _extract_with_llm(main_text: str, si_text: str, paper_id: str) -> dict:
     """
-    One GPT-4o call that extracts all compound name–ID pairs (Module 2.02 prompt).
-    Returns dict with verified_compounds and unresolved_mentions lists.
-    Falls back to empty dict on failure.
+    Extract all compound name-ID pairs by chunking the SI by paragraph and
+    calling GPT-4o once per chunk. Results are merged across chunks.
+
+    The main article is sent with every chunk (it's short enough).
+    SI is split at paragraph boundaries to avoid cutting mid-compound.
     """
     if not settings.OPENAI_API_KEY:
         logger.warning("[run_identifier_dictionary] OPENAI_API_KEY not set — skipping LLM")
@@ -131,36 +133,86 @@ def _extract_with_llm(main_text: str, si_text: str, paper_id: str) -> dict:
     if not system_prompt:
         return {}
 
-    main_excerpt = main_text[:40_000]
-    si_excerpt   = si_text[:40_000]
+    # Split SI into paragraph-aware chunks (~60k chars each)
+    SI_CHUNK_SIZE = 60_000
+    paragraphs = [p.strip() for p in si_text.split("\n\n") if p.strip()]
+    si_chunks, current, current_len = [], [], 0
+    for para in paragraphs:
+        para_len = len(para) + 2
+        if current_len + para_len > SI_CHUNK_SIZE and current:
+            si_chunks.append("\n\n".join(current))
+            current, current_len = [], 0
+        current.append(para)
+        current_len += para_len
+    if current:
+        si_chunks.append("\n\n".join(current))
 
-    user_content = (
-        f"Main Article:\n{main_excerpt}\n\n"
-        f"Supporting Information:\n{si_excerpt}\n\n"
-        f"Return your answer as valid JSON only, "
-        f"with keys 'verified_compounds' and 'unresolved_mentions'."
+    main_excerpt = main_text[:40_000]
+    logger.info(
+        f"[run_identifier_dictionary] SI {len(si_text)} chars → "
+        f"{len(si_chunks)} chunk(s) to process"
     )
 
+    all_verified   = {}   # compound_id → entry (deduplicated)
+    all_unresolved = {}
+
     try:
+        import time
         from openai import OpenAI
         client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        resp = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_content},
-            ],
-            response_format={"type": "json_object"},
-            max_tokens=4096,
-        )
-        raw = resp.choices[0].message.content
-        result = json.loads(raw)
+
+        for chunk_idx, si_chunk in enumerate(si_chunks):
+            user_content = (
+                f"Main Article:\n{main_excerpt}\n\n"
+                f"Supporting Information (part {chunk_idx + 1} of {len(si_chunks)}):\n{si_chunk}\n\n"
+                f"Return valid JSON only with keys 'verified_compounds' and 'unresolved_mentions'."
+            )
+            try:
+                time.sleep(3)
+                resp = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": user_content},
+                    ],
+                    response_format={"type": "json_object"},
+                    max_tokens=8192,
+                )
+                raw = resp.choices[0].message.content
+                if not raw:
+                    continue
+                result = json.loads(raw)
+
+                for entry in result.get("verified_compounds", []):
+                    cid = str(entry.get("compound_id", "")).strip()
+                    if cid and cid not in all_verified:
+                        all_verified[cid] = entry
+
+                for entry in result.get("unresolved_mentions", []):
+                    cid = str(entry.get("compound_id", "")).strip()
+                    if cid and cid not in all_verified and cid not in all_unresolved:
+                        all_unresolved[cid] = entry
+
+                logger.info(
+                    f"[run_identifier_dictionary] chunk {chunk_idx + 1}: "
+                    f"+{len(result.get('verified_compounds', []))} verified "
+                    f"(total so far: {len(all_verified)})"
+                )
+
+            except Exception as chunk_exc:
+                logger.warning(
+                    f"[run_identifier_dictionary] chunk {chunk_idx + 1} failed: {chunk_exc} — skipping"
+                )
+                continue
+
         logger.info(
             f"[run_identifier_dictionary] LLM extracted "
-            f"{len(result.get('verified_compounds', []))} verified, "
-            f"{len(result.get('unresolved_mentions', []))} unresolved for {paper_id}"
+            f"{len(all_verified)} verified, {len(all_unresolved)} unresolved for {paper_id}"
         )
-        return result
+        return {
+            "verified_compounds":   list(all_verified.values()),
+            "unresolved_mentions":  list(all_unresolved.values()),
+        }
 
     except Exception as exc:
         logger.warning(f"[run_identifier_dictionary] LLM call failed for {paper_id}: {exc}")
