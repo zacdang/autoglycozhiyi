@@ -22,6 +22,8 @@ Workflow:
   7. Post-processing & Provenance  post_process_and_save()    [Module 7]
 """
 
+from pathlib import Path
+
 from src.models.paper import Paper
 from src.models.reaction_record import ReactionRecord
 from src.pipeline.load_documents             import load_documents
@@ -132,15 +134,18 @@ def run_pipeline(paper: Paper) -> tuple:
     # ── 7a. SI Experimental Extraction [Module 2.04] ─────────────────────────
     # Reads SI text (if available) to fill masses, mmol, volumes, SMILES
     # for each product compound. Results merged into CSV rows by save_outputs.
-    si_data = run_si_extraction(documents, scheme_extractions)
-
-    # Save SI data to intermediate dir for reuse / debugging
-    from src.utils.json_utils import save_json
+    from src.utils.json_utils import save_json, load_json
     from configs import settings as _s
-    if si_data:
-        si_data_path = Path(_s.INTERMEDIATE_DIR) / f"{paper.paper_id}_si_data.json"
-        save_json(si_data, si_data_path)
-        logger.info(f"SI data saved → {si_data_path}")
+    si_data_path = Path(_s.INTERMEDIATE_DIR) / f"{paper.paper_id}_si_data.json"
+
+    if si_data_path.exists():
+        si_data = load_json(si_data_path)
+        logger.info(f"SI data loaded from cache → {si_data_path} ({len(si_data)} compounds)")
+    else:
+        si_data = run_si_extraction(documents, scheme_extractions)
+        if si_data:
+            save_json(si_data, si_data_path)
+            logger.info(f"SI data saved → {si_data_path}")
 
     # Save resolved id_dict for quick re-runs / testing
     if id_dict.get("resolved"):

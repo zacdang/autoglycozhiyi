@@ -223,6 +223,8 @@ def _extract_with_llm(si_text: str, product_ids: set, paper_id: str) -> dict:
                 )
 
                 try:
+                    import time
+                    time.sleep(5)   # 5s between calls keeps us under 30k TPM limit
                     resp = client.chat.completions.create(
                         model="gpt-4o",
                         messages=[
