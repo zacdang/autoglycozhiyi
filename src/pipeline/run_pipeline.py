@@ -15,11 +15,11 @@ Workflow:
      ↓
   4. Figure Relevance Decision  classify_relevant_figures()  [Module 2.03 — vision]
      ↓
-  5. Primary Figure Extraction  run_figure_extraction()      [Module 4 — vision]
+  5. Primary Figure Extraction  run_figure_extraction()      [Module 3 — vision]
      ↓
-  6. Completeness Check  +  Fill Missing Fields loop          [Modules 5 + 6]
+  6. Completeness Check  +  Fill Missing Fields loop          [Modules 4 + 5]
      ↓
-  7. Post-processing & Provenance  post_process_and_save()    [Module 7]
+  7. Post-processing & Provenance  post_process_and_save()    [Module 6]
 """
 
 from pathlib import Path
