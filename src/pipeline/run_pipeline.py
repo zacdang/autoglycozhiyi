@@ -94,10 +94,10 @@ def run_pipeline(paper: Paper) -> tuple:
         )
         return [], saved_paths
 
-    # ── 5. Primary Figure Extraction [Module 4] ───────────────────────────────
+    # ── 5. Primary Figure Extraction [Module 3] ───────────────────────────────
     scheme_extractions = run_figure_extraction(relevant_figures, text_org, id_dict)
 
-    # ── 6. Completeness Check + Fill Missing Fields loop [Modules 5 + 6] ─────
+    # ── 6. Completeness Check + Fill Missing Fields loop [Modules 4 + 5] ─────
     completeness_reports = []
     fill_results         = []
 
@@ -153,7 +153,7 @@ def run_pipeline(paper: Paper) -> tuple:
         save_json(id_dict, id_dict_path)
         logger.info(f"ID dict saved → {id_dict_path}")
 
-    # ── 7b. Post-processing & Provenance [Module 7] ───────────────────────────
+    # ── 7b. Post-processing & Provenance [Module 6] ───────────────────────────
     saved_paths = post_process_and_save(
         paper_id             = paper.paper_id,
         fill_results         = fill_results,
