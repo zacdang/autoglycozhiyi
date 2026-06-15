@@ -1,5 +1,5 @@
 """
-Primary Figure-based Extraction — Module 4.
+Primary Figure-based Extraction — Module 3.
 
 For each relevant synthesis figure, sends the PNG image + a TXT description
 (caption + nearby text) to GPT-4o vision with the two-instruction-set prompt
@@ -77,8 +77,8 @@ def run_figure_extraction(
         logger.warning("[run_figure_extraction] Could not load prompt — returning empty")
         return []
 
-    # Build a flat compound name lookup for the TXT context.
-    name_lookup = _build_name_lookup(id_dict)
+    # Build a richer Module 2 → Module 3 identifier context for the TXT prompt.
+    identifier_context = _build_identifier_context(id_dict)
 
     results = []
     for fig in relevant_figures:
@@ -86,7 +86,7 @@ def run_figure_extraction(
         image_path = fig.get("image_path", "")
         logger.info(f"[run_figure_extraction] Extracting scheme from {figure_id} …")
 
-        txt_context = _build_txt_context(fig, text_org, name_lookup)
+        txt_context = _build_txt_context(fig, text_org, identifier_context)
         extraction  = _extract_one_figure(figure_id, image_path, txt_context, prompt_text)
 
         results.append({
@@ -226,14 +226,14 @@ def _extract_one_figure_plaintext(figure_id: str, content: list) -> dict:
         return {}
 
 
-def _build_txt_context(fig: dict, text_org: dict, name_lookup: dict) -> str:
+def _build_txt_context(fig: dict, text_org: dict, identifier_context: str) -> str:
     """
     Build a short TXT description for the figure, combining:
     - figure caption
     - text labels
     - any synthesis_procedures or figure_captions from text_org that mention
       the figure's ID
-    - compound name lookups
+    - Module 2 identifier dictionary context for compound label resolution
     """
     parts: list = []
 
@@ -253,21 +253,53 @@ def _build_txt_context(fig: dict, text_org: dict, name_lookup: dict) -> str:
             parts.append(f"Figure caption block: {ev[:500]}")
             break
 
-    if name_lookup:
-        pairs = [f"{k}: {v}" for k, v in list(name_lookup.items())[:20]]
-        parts.append("Compound name dictionary:\n" + "\n".join(pairs))
+    if identifier_context:
+        parts.append(identifier_context)
 
     return "\n\n".join(parts)
 
 
-def _build_name_lookup(id_dict: dict) -> dict:
-    """Return { compound_id: compound_name } for all resolved entries."""
-    lookup = {}
-    for cid, entry in id_dict.get("resolved", {}).items():
-        name = entry.get("compound_name") or entry.get("possible_name")
-        if name:
-            lookup[cid] = name
-    return lookup
+def _build_identifier_context(id_dict: dict, max_entries: int = 50) -> str:
+    """
+    Build the Module 2 → Module 3 identifier dictionary context.
+
+    Module 2 produces a resolved identifier dictionary. This helper converts
+    that structured output into a compact text block that Module 3 can use
+    while reading the primary figure. It keeps the compound ID, resolved name,
+    source information, confidence, and evidence text when available.
+    """
+    resolved = id_dict.get("resolved", {})
+    if not resolved:
+        return ""
+
+    lines = []
+    for idx, (compound_id, entry) in enumerate(resolved.items()):
+        if idx >= max_entries:
+            remaining = len(resolved) - max_entries
+            if remaining > 0:
+                lines.append(f"- ... {remaining} additional identifier(s) omitted for brevity")
+            break
+
+        compound_name = (
+            entry.get("compound_name")
+            or entry.get("possible_name")
+            or entry.get("name")
+            or "NR"
+        )
+        source = entry.get("source_type") or entry.get("source") or "unknown"
+        confidence = entry.get("confidence", "unknown")
+        evidence = entry.get("evidence_text") or entry.get("source_text") or ""
+
+        evidence = str(evidence).replace("\n", " ").strip()
+        if len(evidence) > 200:
+            evidence = evidence[:200] + "..."
+
+        lines.append(
+            f"- {compound_id}: {compound_name} | source: {source} | "
+            f"confidence: {confidence} | evidence: {evidence}"
+        )
+
+    return "Module 2 identifier dictionary for Module 3:\n" + "\n".join(lines)
 
 
 def _encode_image(image_path: str) -> str:

@@ -78,6 +78,18 @@ def run_pipeline(paper: Paper) -> tuple:
     unified          = merge_extractions(mermaid_output, text_org)
     relevant_figures = classify_relevant_figures(unified)
 
+    # ── 4b. Pipeline Readiness Check ─────────────────────────────────────────
+    from src.pipeline.pipeline_readiness import build_pipeline_readiness_summary
+    readiness = build_pipeline_readiness_summary(documents, text_org, id_dict, relevant_figures)
+    logger.info(
+        f"Readiness check: ready={readiness['ready_for_downstream_extraction']}, "
+        f"figures={readiness['relevant_figure_count']}, "
+        f"resolved_ids={readiness['identifier_quality_summary']['resolved_count']}, "
+        f"warnings={len(readiness['warnings'])}"
+    )
+    for w in readiness.get("warnings", []):
+        logger.warning(f"  [readiness] {w}")
+
     if not relevant_figures:
         logger.warning(
             f"No relevant figures for {paper.paper_id} — producing minimal output."
