@@ -72,7 +72,19 @@ def run_pipeline(paper: Paper) -> tuple:
 
     # ── 3 branches (A + B run in serial; C is mermaid_output) ────────────────
     text_org = run_text_organisation(documents)
-    id_dict  = run_identifier_dictionary(documents, text_org)
+
+    # Load id_dict from cache if available (saves ~5 min of chunked API calls)
+    from src.utils.json_utils import load_json, save_json
+    from configs import settings as _s
+    id_dict_cache_path = Path(_s.INTERMEDIATE_DIR) / f"{paper.paper_id}_id_dict.json"
+    if id_dict_cache_path.exists():
+        id_dict = load_json(id_dict_cache_path)
+        logger.info(
+            f"ID dict loaded from cache → {id_dict_cache_path} "
+            f"({len(id_dict.get('resolved', {}))} resolved)"
+        )
+    else:
+        id_dict = run_identifier_dictionary(documents, text_org)
 
     # ── 4. Figure Relevance Decision ──────────────────────────────────────────
     unified          = merge_extractions(mermaid_output, text_org)
