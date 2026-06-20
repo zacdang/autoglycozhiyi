@@ -24,6 +24,7 @@ have well-typed inputs without making any API calls.
 
 import base64
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional
 
@@ -80,26 +81,57 @@ def run_figure_extraction(
     # Build a richer Module 2 → Module 3 identifier context for the TXT prompt.
     identifier_context = _build_identifier_context(id_dict)
 
-    results = []
+    # ── Parallel extraction: up to 2 concurrent GPT-4o vision calls ──────────
+    # max_workers=2 is intentional — GPT-4o image calls are ~4 k tokens each;
+    # two in parallel stays safely under the 30 k TPM rate limit.
+    MAX_WORKERS = 2
+
+    # Pre-build all work items so the executor closure captures no loop variables.
+    work_items = []
     for fig in relevant_figures:
-        figure_id  = fig.get("figure_id", "unknown")
-        image_path = fig.get("image_path", "")
-        logger.info(f"[run_figure_extraction] Extracting scheme from {figure_id} …")
-
+        figure_id   = fig.get("figure_id", "unknown")
+        image_path  = fig.get("image_path", "")
         txt_context = _build_txt_context(fig, text_org, identifier_context)
-        extraction  = _extract_one_figure(figure_id, image_path, txt_context, prompt_text)
+        work_items.append((fig, figure_id, image_path, txt_context))
 
-        results.append({
-            "figure_id":      figure_id,
-            "image_path":     image_path,
+    results_map: dict = {}   # figure_id → result dict (insertion order preserved after)
+
+    def _extract_worker(work_item):
+        fig, fid, img_path, txt_ctx = work_item
+        logger.info(f"[run_figure_extraction] Extracting scheme from {fid} …")
+        extraction = _extract_one_figure(fid, img_path, txt_ctx, prompt_text)
+        return fid, {
+            "figure_id":      fid,
+            "image_path":     img_path,
             "reaction_paths": extraction.get("reaction_paths", []),
             "step_analysis":  extraction.get("step_analysis", {}),
             "raw_llm_output": extraction,
-        })
+        }
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_fid = {executor.submit(_extract_worker, item): item[1]
+                         for item in work_items}
+        for future in as_completed(future_to_fid):
+            fid = future_to_fid[future]
+            try:
+                fid_result, result_dict = future.result()
+                results_map[fid_result] = result_dict
+            except Exception as exc:
+                logger.warning(f"[run_figure_extraction] Worker for {fid} raised: {exc}")
+                results_map[fid] = {
+                    "figure_id":      fid,
+                    "image_path":     "",
+                    "reaction_paths": [],
+                    "step_analysis":  {},
+                    "raw_llm_output": {},
+                }
+
+    # Restore original figure order.
+    results = [results_map[item[1]] for item in work_items if item[1] in results_map]
 
     logger.info(
         f"[run_figure_extraction] Extracted {len(results)} scheme(s) from "
-        f"{len(relevant_figures)} relevant figure(s)"
+        f"{len(relevant_figures)} relevant figure(s) (parallel workers={MAX_WORKERS})"
     )
     return results
 
