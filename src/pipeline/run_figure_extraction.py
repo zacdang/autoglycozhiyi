@@ -18,6 +18,24 @@ Each call returns:
     }
   }
 
+Every result dict (success or failure) carries:
+    extraction_status : "success" | "failed"
+    failure_code      : None on success; one of:
+                          "rate_limit"        — 429 / OpenAI rate-limit error
+                          "timeout"           — request timed out
+                          "api_error"         — other OpenAI API error
+                          "malformed_response"— API returned non-parseable JSON
+                          "no_api_key"        — OPENAI_API_KEY not configured
+                          "empty_result"      — all retries returned empty dict
+                          "unexpected_error"  — uncaught error in worker
+    attempt_count     : number of attempts made (1 … max_retries)
+    has_image         : bool — whether the image file existed on disk
+
+Module 5 reads failure_code + has_image to split failures into two buckets:
+  • module_3_technical  (API / infra problem — retry or fix key/image)
+  • possible_module_4_false_positive (LLM got a readable image but found no
+    reaction steps — figure may not be a reaction scheme)
+
 In mock mode returns a minimal placeholder structure so downstream modules
 have well-typed inputs without making any API calls.
 """
@@ -60,11 +78,15 @@ def run_figure_extraction(
     Returns
     -------
     List of scheme extraction dicts, one per relevant figure.  Each dict has:
-        figure_id       : str
-        image_path      : str
-        reaction_paths  : list of { "path": str }
-        step_analysis   : { phase, scheme_steps_count, reaction_steps, notes }
-        raw_llm_output  : dict (full LLM response for debugging)
+        figure_id        : str
+        image_path       : str
+        reaction_paths   : list of { "path": str }
+        step_analysis    : { phase, scheme_steps_count, reaction_steps, notes }
+        raw_llm_output   : dict (full LLM response for debugging)
+        extraction_status: "success" | "failed"
+        failure_code     : str | None
+        attempt_count    : int
+        has_image        : bool
     """
     if not relevant_figures:
         logger.info("[run_figure_extraction] No relevant figures — skipping")
@@ -96,17 +118,44 @@ def run_figure_extraction(
     results_map: dict = {}   # figure_id → result dict (insertion order preserved after)
 
     def _extract_worker(work_item):
-        """Extract one figure with exponential-backoff retry.  Never raises."""
+        """
+        Extract one figure with exponential-backoff retry.
+        Never raises — returns a structured result with extraction_status and
+        failure_code so Module 5 can route failures correctly.
+        """
         import time
         _, fid, img_path, txt_ctx = work_item
         logger.info(f"[run_figure_extraction] Extracting scheme from {fid} …")
 
-        last_exc = None
+        has_image     = bool(img_path) and Path(img_path).exists()
+        last_failure_code = "unknown"
+        attempt_count = 0
+
         for attempt in range(max_retries):
+            attempt_count = attempt + 1
             try:
-                extraction = _extract_one_figure(fid, img_path, txt_ctx, prompt_text)
-                # An empty dict means a soft failure — retry it too
+                extraction, failure_code = _extract_one_figure(
+                    fid, img_path, txt_ctx, prompt_text
+                )
+
+                if failure_code:
+                    last_failure_code = failure_code
+                    # Permanent failure — don't burn retries.
+                    if failure_code == "no_api_key":
+                        break
+                    if attempt < max_retries - 1:
+                        delay = 2 ** attempt
+                        logger.warning(
+                            f"[run_figure_extraction] {fid}: [{failure_code}] on attempt "
+                            f"{attempt + 1}/{max_retries}, retrying in {delay}s …"
+                        )
+                        time.sleep(delay)
+                        continue
+                    break
+
+                # Soft failure: API succeeded but returned nothing useful — retry.
                 if not extraction and attempt < max_retries - 1:
+                    last_failure_code = "empty_result"
                     delay = 2 ** attempt
                     logger.warning(
                         f"[run_figure_extraction] {fid}: empty result on attempt "
@@ -114,33 +163,43 @@ def run_figure_extraction(
                     )
                     time.sleep(delay)
                     continue
+
                 return fid, {
-                    "figure_id":      fid,
-                    "image_path":     img_path,
-                    "reaction_paths": extraction.get("reaction_paths", []),
-                    "step_analysis":  extraction.get("step_analysis", {}),
-                    "raw_llm_output": extraction,
+                    "figure_id":        fid,
+                    "image_path":       img_path,
+                    "reaction_paths":   extraction.get("reaction_paths", []),
+                    "step_analysis":    extraction.get("step_analysis", {}),
+                    "raw_llm_output":   extraction,
+                    "extraction_status": "success",
+                    "failure_code":     None,
+                    "attempt_count":    attempt_count,
+                    "has_image":        has_image,
                 }
+
             except Exception as exc:
-                last_exc = exc
+                # Should rarely fire — _extract_one_figure catches its own exceptions.
+                last_failure_code = "unexpected_error"
                 delay = 2 ** attempt
                 logger.warning(
-                    f"[run_figure_extraction] {fid}: attempt {attempt + 1}/{max_retries} "
-                    f"failed ({exc}), retrying in {delay}s …"
+                    f"[run_figure_extraction] {fid}: unexpected error on attempt "
+                    f"{attempt + 1}/{max_retries} ({exc}), retrying in {delay}s …"
                 )
                 time.sleep(delay)
 
-        # All retries exhausted — return an isolated empty result, do NOT raise.
         logger.error(
-            f"[run_figure_extraction] {fid}: all {max_retries} attempt(s) failed "
-            f"— returning empty extraction. Last error: {last_exc}"
+            f"[run_figure_extraction] {fid}: all {attempt_count} attempt(s) failed "
+            f"[failure_code={last_failure_code}] — quarantining this figure."
         )
         return fid, {
-            "figure_id":      fid,
-            "image_path":     img_path,
-            "reaction_paths": [],
-            "step_analysis":  {},
-            "raw_llm_output": {},
+            "figure_id":        fid,
+            "image_path":       img_path,
+            "reaction_paths":   [],
+            "step_analysis":    {},
+            "raw_llm_output":   {},
+            "extraction_status": "failed",
+            "failure_code":     last_failure_code,
+            "attempt_count":    attempt_count,
+            "has_image":        has_image,
         }
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -152,23 +211,35 @@ def run_figure_extraction(
                 fid_result, result_dict = future.result()
                 results_map[fid_result] = result_dict
             except Exception as exc:
-                # Should never reach here given the try/except inside _extract_worker,
-                # but guard anyway so one figure can never abort the whole run.
-                logger.error(f"[run_figure_extraction] Unexpected error for {fid}: {exc}")
+                # Guard: should never reach here given try/except inside _extract_worker.
+                logger.error(f"[run_figure_extraction] Unexpected executor error for {fid}: {exc}")
                 results_map[fid] = {
-                    "figure_id":      fid,
-                    "image_path":     "",
-                    "reaction_paths": [],
-                    "step_analysis":  {},
-                    "raw_llm_output": {},
+                    "figure_id":        fid,
+                    "image_path":       "",
+                    "reaction_paths":   [],
+                    "step_analysis":    {},
+                    "raw_llm_output":   {},
+                    "extraction_status": "failed",
+                    "failure_code":     "unexpected_error",
+                    "attempt_count":    0,
+                    "has_image":        False,
                 }
 
     # Restore original figure order.
     results = [results_map[item[1]] for item in work_items if item[1] in results_map]
 
+    # ── Extraction summary log ────────────────────────────────────────────────
+    n_success = sum(1 for r in results if r.get("extraction_status") == "success")
+    n_failed  = len(results) - n_success
+    failure_breakdown: dict = {}
+    for r in results:
+        fc = r.get("failure_code")
+        if fc:
+            failure_breakdown[fc] = failure_breakdown.get(fc, 0) + 1
+
     logger.info(
-        f"[run_figure_extraction] Extracted {len(results)} scheme(s) from "
-        f"{len(relevant_figures)} relevant figure(s) "
+        f"[run_figure_extraction] Done: {n_success}/{len(results)} succeeded, "
+        f"{n_failed} failed {failure_breakdown} "
         f"(workers={max_workers}, max_retries={max_retries})"
     )
     return results
@@ -181,19 +252,23 @@ def _extract_one_figure(
     image_path: str,
     txt_context: str,
     prompt_text: str,
-) -> dict:
+) -> tuple:
     """
     One GPT-4o vision call for a single figure.
-    Returns the parsed JSON dict (reaction_paths + step_analysis).
-    Falls back to an empty structure on failure.
+
+    Returns
+    -------
+    (result_dict, failure_code)
+    result_dict  : parsed JSON on success, {} on failure
+    failure_code : None on success; "rate_limit" | "timeout" | "api_error" |
+                   "malformed_response" | "no_api_key" on failure
     """
     if not settings.OPENAI_API_KEY:
         logger.warning(f"[run_figure_extraction] OPENAI_API_KEY not set — skipping {figure_id}")
-        return {}
+        return {}, "no_api_key"
 
     image_b64 = _encode_image(image_path)
 
-    # Build the user message content.
     content: list = [{"type": "text", "text": prompt_text}]
     if image_b64:
         content.append({
@@ -237,7 +312,14 @@ def _extract_one_figure(
                 f"Attempting to parse partial JSON."
             )
 
-        result = json.loads(raw)
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError as je:
+            logger.warning(
+                f"[run_figure_extraction] {figure_id}: JSON parse failed: {je}. "
+                f"Raw response (first 200 chars): {raw[:200]}"
+            )
+            return {}, "malformed_response"
 
         steps = result.get("step_analysis", {}).get("scheme_steps_count", 0)
         paths = len(result.get("reaction_paths", []))
@@ -245,17 +327,30 @@ def _extract_one_figure(
             f"[run_figure_extraction] {figure_id}: "
             f"{steps} step(s), {paths} reaction path(s)"
         )
-        return result
+        return result, None
 
     except Exception as exc:
-        logger.warning(f"[run_figure_extraction] LLM call failed for {figure_id}: {exc}")
-        return {}
+        exc_type = type(exc).__name__
+        exc_str  = str(exc)
+        if "429" in exc_str or "rate_limit" in exc_str.lower() or "RateLimit" in exc_type:
+            failure_code = "rate_limit"
+        elif "timeout" in exc_str.lower() or "Timeout" in exc_type:
+            failure_code = "timeout"
+        else:
+            failure_code = "api_error"
+        logger.warning(
+            f"[run_figure_extraction] LLM call failed for {figure_id} "
+            f"[{failure_code}]: {exc}"
+        )
+        return {}, failure_code
 
 
-def _extract_one_figure_plaintext(figure_id: str, content: list) -> dict:
+def _extract_one_figure_plaintext(figure_id: str, content: list) -> tuple:
     """
     Fallback when json_object mode returns None.
     Ask GPT-4o to return plain text, then wrap result in minimal structure.
+
+    Returns (result_dict, failure_code) — same contract as _extract_one_figure.
     """
     try:
         from openai import OpenAI
@@ -269,7 +364,6 @@ def _extract_one_figure_plaintext(figure_id: str, content: list) -> dict:
             "reaction_steps (list of steps with donor, acceptor, product compound IDs "
             "and solution_conditions), notes (string)."
         )
-        # Replace the first text item with the fallback instruction appended
         new_content = list(content)
         if new_content and new_content[0].get("type") == "text":
             new_content[0] = {
@@ -283,17 +377,27 @@ def _extract_one_figure_plaintext(figure_id: str, content: list) -> dict:
             max_tokens=8192,
         )
         raw = resp.choices[0].message.content or ""
-        # Extract JSON block if wrapped in markdown
         if "```json" in raw:
             raw = raw.split("```json")[1].split("```")[0].strip()
         elif "```" in raw:
             raw = raw.split("```")[1].split("```")[0].strip()
-        result = json.loads(raw)
+
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError as je:
+            logger.warning(
+                f"[run_figure_extraction] {figure_id}: plaintext fallback JSON parse failed: {je}"
+            )
+            return {}, "malformed_response"
+
         logger.info(f"[run_figure_extraction] {figure_id}: plaintext fallback succeeded")
-        return result
+        return result, None
+
     except Exception as exc:
-        logger.warning(f"[run_figure_extraction] {figure_id}: plaintext fallback also failed: {exc}")
-        return {}
+        logger.warning(
+            f"[run_figure_extraction] {figure_id}: plaintext fallback also failed: {exc}"
+        )
+        return {}, "api_error"
 
 
 def _build_txt_context(fig: dict, text_org: dict, identifier_context: str) -> str:
@@ -443,7 +547,11 @@ def _mock_extractions(relevant_figures: List[dict]) -> List[dict]:
                 ],
                 "notes": "mock mode placeholder",
             },
-            "raw_llm_output": {},
+            "raw_llm_output":    {},
+            "extraction_status": "success",
+            "failure_code":      None,
+            "attempt_count":     0,
+            "has_image":         bool(fig.get("image_path")),
         })
     logger.info(f"[run_figure_extraction] mock — {len(results)} placeholder extraction(s)")
     return results

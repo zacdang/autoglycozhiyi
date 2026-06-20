@@ -34,7 +34,10 @@ from src.pipeline.run_identifier_dictionary  import run_identifier_dictionary
 from src.pipeline.merge_extractions          import merge_extractions
 from src.pipeline.classify_relevant_figures  import classify_relevant_figures
 from src.pipeline.run_figure_extraction      import run_figure_extraction
-from src.pipeline.validate_and_normalize     import check_completeness, validate_and_normalize
+from src.pipeline.validate_and_normalize     import (
+    check_completeness, validate_and_normalize,
+    log_completeness_summary, log_fill_targets_summary,
+)
 from src.pipeline.fill_missing_fields        import fill_scheme_missing_fields, fill_missing_fields
 from src.pipeline.assign_roles               import assign_roles
 from src.pipeline.retrieve_supporting_chunks import retrieve_supporting_chunks
@@ -146,26 +149,68 @@ def run_pipeline(paper: Paper) -> tuple:
         log_validation(se, "figure_extraction", context=f"Module 3/{se.get('figure_id','?')}")
 
     # ── 6. Completeness Check + Fill Missing Fields loop [Modules 5 + 6] ─────
+    # Module 5 now acts as a router: it classifies missing fields by source
+    # (text fill / SI extraction / external lookup) and only blocks core_complete
+    # on fields that are actually extractable from figure/text.
+    #
+    # Loop exits early when:
+    #   (a) all schemes are core_complete, OR
+    #   (b) fill_target_fields didn't shrink between iterations (no progress), OR
+    #   (c) MAX_ITERATIONS reached.
     completeness_reports = []
     fill_results         = []
+    prev_fill_targets    = None   # for delta check
 
     for iteration in range(MAX_ITERATIONS):
         completeness_reports = check_completeness(scheme_extractions, text_org, id_dict)
 
-        all_complete = all(r.get("is_complete", False) for r in completeness_reports)
+        # Log routing summary (core/fill/SI/external/failed counts + failure sources).
+        log_completeness_summary(completeness_reports)
+        # Log which fields are most commonly missing — pattern = prompt gap; random = image quality.
+        log_fill_targets_summary(completeness_reports)
+
+        all_complete = all(
+            r.get("core_complete", r.get("is_complete", False))
+            for r in completeness_reports
+        )
         if all_complete:
-            logger.info(f"All schemes complete after iteration {iteration}")
+            logger.info(f"All schemes core-complete after iteration {iteration}")
             # Still run fill once to enrich compound names from id_dict.
             fill_results = fill_scheme_missing_fields(
                 scheme_extractions, completeness_reports, text_org, id_dict
             )
             break
 
-        logger.info(
-            f"Iteration {iteration}: "
-            f"{sum(1 for r in completeness_reports if not r.get('is_complete'))}/"
-            f"{len(completeness_reports)} scheme(s) incomplete — filling …"
+        # Collect only text-fillable targets for delta check.
+        # SI targets / external targets / not_reported are intentionally excluded —
+        # Module 6 cannot solve those, so including them would falsely prevent early exit.
+        current_targets = _collect_fill_targets(completeness_reports)
+
+        n_incomplete = sum(
+            1 for r in completeness_reports
+            if not r.get("core_complete", r.get("is_complete", False))
         )
+        needs_fill = sum(
+            1 for r in completeness_reports if r.get("should_run_text_fill", False)
+        )
+        logger.info(
+            f"Iteration {iteration}: {n_incomplete}/{len(completeness_reports)} "
+            f"scheme(s) incomplete, {needs_fill} need text fill — "
+            f"fill targets: {sorted(current_targets)}"
+        )
+
+        # Delta check: if targets didn't shrink since last iteration, stop.
+        if prev_fill_targets is not None and current_targets >= prev_fill_targets:
+            logger.info(
+                f"Fill targets unchanged after iteration {iteration - 1} "
+                f"({len(current_targets)} remaining) — stopping loop to avoid "
+                f"burning tokens without new information."
+            )
+            # One final fill pass was already done — use existing fill_results.
+            break
+
+        prev_fill_targets = current_targets
+
         fill_results = fill_scheme_missing_fields(
             scheme_extractions, completeness_reports, text_org, id_dict
         )
@@ -180,23 +225,33 @@ def run_pipeline(paper: Paper) -> tuple:
         )
 
     # ── 7a. SI Experimental Extraction [Module 2.04] ─────────────────────────
-    # Reads SI text (if available) to fill masses, mmol, volumes, SMILES
-    # for each product compound. Results merged into CSV rows by save_outputs.
+    # Gated by ENABLE_SI_EXTRACTION (default: false).
+    # When disabled: no SI text is chunked, no SI prompts are built, and no
+    # OpenAI calls are made for this module.  si_data = {} flows downstream so
+    # exports stay intact and SI-owned fields are recorded as NR / si_required
+    # in audit logs.  Re-enable with ENABLE_SI_EXTRACTION=true in .env.
     from src.utils.json_utils import save_json, load_json
-    si_pdf_path = Path(paper.si_path) if hasattr(paper, "si_path") and paper.si_path else Path("__missing__")
-    _si_key     = _s.cache_key(paper.paper_id, si_pdf_path, _SI_DATA_PROMPT)
-    si_data_path = intermediate_dir / f"{paper.paper_id}_si_data_{_si_key}.json"
-
-    if si_data_path.exists():
-        si_data = load_json(si_data_path)
-        logger.info(f"SI data loaded from cache [{_si_key}] → {si_data_path} ({len(si_data)} compounds)")
+    if not _s.ENABLE_SI_EXTRACTION:
+        logger.info(
+            "[SI] Skipping SI extraction — ENABLE_SI_EXTRACTION=false. "
+            "SI-owned fields will be NR in output."
+        )
+        si_data = {}
     else:
-        si_data = run_si_extraction(documents, scheme_extractions)
-        if si_data:
-            save_json(si_data, si_data_path)
-            logger.info(f"SI data saved → {si_data_path}")
+        si_pdf_path = Path(paper.si_path) if hasattr(paper, "si_path") and paper.si_path else Path("__missing__")
+        _si_key     = _s.cache_key(paper.paper_id, si_pdf_path, _SI_DATA_PROMPT)
+        si_data_path = intermediate_dir / f"{paper.paper_id}_si_data_{_si_key}.json"
 
-    log_validation(si_data, "si_data", context="Module 2.04")
+        if si_data_path.exists():
+            si_data = load_json(si_data_path)
+            logger.info(f"SI data loaded from cache [{_si_key}] → {si_data_path} ({len(si_data)} compounds)")
+        else:
+            si_data = run_si_extraction(documents, scheme_extractions)
+            if si_data:
+                save_json(si_data, si_data_path)
+                logger.info(f"SI data saved → {si_data_path}")
+
+        log_validation(si_data, "si_data", context="Module 2.04")
 
     # Save resolved id_dict (keyed cache file — auto-busts on prompt/PDF changes)
     if id_dict.get("resolved") and not id_dict_cache_path.exists():
@@ -225,6 +280,24 @@ def run_pipeline(paper: Paper) -> tuple:
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _collect_fill_targets(completeness_reports: list) -> set:
+    """
+    Collect the union of fill_target_fields (text-fillable targets only) across
+    all incomplete schemes.  Used for the delta check between fill iterations.
+
+    Intentionally excludes si_target_fields, external_target_fields,
+    not_reported_fields, and low_confidence_fields — those belong to other
+    modules.  Including them would keep the loop running even when Module 6
+    has nothing left it can do.
+    """
+    targets = set()
+    for r in completeness_reports:
+        if not r.get("core_complete", r.get("is_complete", False)):
+            for field in r.get("fill_target_fields", []):
+                targets.add(f"{r.get('figure_id', '?')}:{field}")
+    return targets
+
 
 def _patch_extractions(scheme_extractions: list, fill_results: list) -> list:
     """

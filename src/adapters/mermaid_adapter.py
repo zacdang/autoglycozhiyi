@@ -148,7 +148,18 @@ def _run_real(
     logger.info(f"VisualHeist: {len(figures)} figure(s) for {paper_id}")
 
     # ── Step 2: DataRaider ────────────────────────────────────────────────────
-    tables = _run_dataraider(paper_id, image_dir, json_dir, prompt_dir)
+    # If DataRaider JSON outputs already exist from a previous run, load them
+    # directly — this lets the pipeline proceed even when the dataraider package
+    # is not installed in the current environment.
+    existing_jsons = list(json_dir.glob("*.json"))
+    if existing_jsons:
+        logger.info(
+            f"DataRaider outputs already exist ({len(existing_jsons)} JSON files) "
+            f"— skipping DataRaider run and loading from cache"
+        )
+        tables = _load_dataraider_cache(json_dir)
+    else:
+        tables = _run_dataraider(paper_id, image_dir, json_dir, prompt_dir)
     logger.info(f"DataRaider extracted {len(tables)} reaction table(s) from {paper_id}")
 
     # ── Step 3: Use text_blocks from the Shared Input Layer ───────────────────
@@ -266,6 +277,22 @@ def _run_visualheist(paper_id: str, pdf_path: str, image_dir: Path) -> list:
 
 
 # ── Step 2 helper: DataRaider ─────────────────────────────────────────────────
+
+def _load_dataraider_cache(json_dir: Path) -> list:
+    """Load existing DataRaider JSON outputs without re-running DataRaider."""
+    tables = []
+    for json_file in sorted(json_dir.glob("*.json")):
+        try:
+            data = load_json(json_file)
+            if isinstance(data, list):
+                tables.extend(data)
+            elif isinstance(data, dict):
+                tables.append(data)
+        except Exception as exc:
+            logger.warning(f"[mermaid_adapter] Could not load {json_file}: {exc}")
+    logger.info(f"[mermaid_adapter] Loaded {len(tables)} table(s) from DataRaider cache")
+    return tables
+
 
 def _run_dataraider(
     paper_id: str,

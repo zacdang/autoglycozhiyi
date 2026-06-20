@@ -48,6 +48,14 @@ SAMPLE_FINAL_OUTPUT   = SAMPLES_DIR / "sample_final_output.json"
 # ── OpenAI (required for DataRaider in real mode) ────────────────────────────
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 
+# ── Module feature flags ──────────────────────────────────────────────────────
+# SI extraction (Module 2.04) is paused by default until the SI pipeline is
+# stable.  Set ENABLE_SI_EXTRACTION=true in .env to turn it on.
+# When false: run_si_extraction() is never called, no SI prompts are built,
+# no OpenAI tokens are spent on SI, and si_data = {} flows through to export
+# (SI-owned fields stay NR / si_required in audit logs).
+ENABLE_SI_EXTRACTION: bool = os.getenv("ENABLE_SI_EXTRACTION", "false").lower() == "true"
+
 # ── Parallelism ───────────────────────────────────────────────────────────────
 # Max concurrent GPT-4o vision calls in Module 3.
 # Keep ≤ 3 to stay under the 30 k TPM rate limit for image-heavy requests.

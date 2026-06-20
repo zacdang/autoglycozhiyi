@@ -103,6 +103,19 @@ def fill_scheme_missing_fields(
 
         report = report_by_fig.get(figure_id, {})
 
+        # Respect the Module 5 router: skip LLM fill if not needed
+        if not report.get("should_run_text_fill", True):
+            logger.info(
+                f"[fill_scheme_missing_fields] {figure_id}: "
+                f"skipping text fill (should_run_text_fill=False)"
+            )
+            fill_result = _fill_rule_based(scheme, id_dict, figure_id)
+            fill_result["figure_id"] = figure_id
+            fill_result["fill_target_fields"] = []
+            fill_result["unfilled_fields"] = []
+            results.append(fill_result)
+            continue
+
         if settings.PIPELINE_MODE == "real" and prompt_text:
             fill_result = _fill_with_llm(scheme, report, text_org, id_dict, prompt_text, figure_id)
         else:
@@ -135,11 +148,21 @@ def _fill_with_llm(
 
     text_evidence = _build_text_evidence(text_org)
     dict_evidence = _build_dict_evidence(id_dict)
-    completeness  = json.dumps(report, indent=2)
+
+    # Use targeted field list from Module 5 router so LLM focuses its search.
+    fill_targets   = report.get("fill_target_fields", [])
+    low_confidence = report.get("low_confidence_fields", [])
+    not_reported   = report.get("not_reported_fields", [])
+
+    routing_summary = (
+        f"Fields to fill from text (fill_target_fields): {fill_targets or 'none'}\n"
+        f"Low-confidence fields (verify if possible): {low_confidence or 'none'}\n"
+        f"Not reported in paper (do not attempt): {not_reported or 'none'}"
+    )
 
     user_content = (
         f"Preliminary reaction extraction JSON:\n{extraction_json}\n\n"
-        f"Completeness check report:\n{completeness}\n\n"
+        f"Module 5 routing:\n{routing_summary}\n\n"
         f"Organised text evidence:\n{text_evidence}\n\n"
         f"Compound identifier dictionary:\n{dict_evidence}"
     )

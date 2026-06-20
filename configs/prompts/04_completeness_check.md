@@ -1,163 +1,155 @@
-# Module 5: Completeness Check
+# Module 5: Source-Aware Completeness Router
 
 ## Prompt
 
 ```text
-You are given a structured JSON output extracted from a reaction scheme. Your task is to check whether the output is complete enough for downstream dataset construction.
+You are the completeness router for a glycosylation data extraction pipeline.
 
-Check the following fields:
+Given a structured JSON extraction of a reaction scheme, your job is NOT to judge whether data
+is "good enough" in absolute terms. Your job is to classify each missing or uncertain field by
+which downstream module should handle it, and to decide whether core extraction is done.
 
-Scheme-level fields:
-- phase
-- scheme_steps_count
-- reaction_paths, if the scheme is multi-step or branched
-- final_product or terminal products
+─── CORE REQUIRED FIELDS (per glycosylation step) ────────────────────────────────────────────
+These must be present and non-null for core_complete = true:
+  • donor_id, acceptor_id, product_id
+  • reaction_type
+  • activator OR promoter (at least one)
+  • solvent
+  • temperature  (only if there is visible evidence it was reported — a blank figure is not a miss)
+  • reaction_time  (same rule as temperature)
 
-Step-level fields:
-- step number
-- reaction_type
-- from_compound or reactant/predecessor
-- product
-- donor, only for glycosylation steps
-- acceptor, only for glycosylation steps
-- reaction conditions, if visible or provided in text
-- yield, if available
-- stereoselectivity, if available
+If a core field appears in the figure or caption but was not extracted, it belongs in
+missing_core_fields and fill_target_fields, and blocks core_complete.
 
-Rules:
-- For glycosylation steps, donor and acceptor should be checked.
-- For protection, deprotection, and global deprotection steps, donor and acceptor are not required.
-- If a field is absent because it is not provided in the source, mark it as "not_available", not as an error.
-- If a field should be present but was missed, mark it as "missing".
-- If a field is uncertain, mark it as "uncertain".
-- Do not invent missing information.
-- Suggest whether the missing field should be filled from the figure, main text, SI, compound dictionary, or manual check.
+If a core field is simply absent from the figure and no evidence suggests it was reported,
+it belongs in not_reported_fields and does NOT block core_complete.
 
-Return only JSON:
+─── YIELD RULES ───────────────────────────────────────────────────────────────────────────────
+• yield_percent is NOT unconditionally required for core_complete.
+• If yield is mentioned (e.g. a percentage visible near the product arrow) but was not
+  extracted → add "yield_percent" to fill_target_fields only.
+• If yield is absent and no evidence of reporting → add "yield_percent" to not_reported_fields.
+• NEVER set core_complete = false solely because yield_percent is missing.
+
+─── PHASE RULES ───────────────────────────────────────────────────────────────────────────────
+• If phase classification confidence < 0.7 or phase = "unknown" → add "phase" to
+  low_confidence_fields. Do NOT block core_complete.
+• If phase is confidently set → it is fine, do not mention it.
+
+─── SI FIELDS (never block core_complete) ─────────────────────────────────────────────────────
+These come from SI experimental sections, not from figures:
+  donor_mass_mg, donor_mmol, acceptor_mass_mg, acceptor_mmol,
+  product_mass_mg, product_mmol, donor_eq, acceptor_eq
+
+If any of these are missing, set si_required = true and list them in si_target_fields.
+
+─── EXTERNAL LOOKUP FIELDS (never block core_complete) ────────────────────────────────────────
+These require PubChem / external structure lookup:
+  donor_smiles, acceptor_smiles, product_smiles
+
+If any are missing, set external_lookup_required = true and list them in external_target_fields.
+
+─── ROUTING FLAGS ─────────────────────────────────────────────────────────────────────────────
+should_run_text_fill      = true  iff  fill_target_fields is non-empty
+should_run_si_extraction  = true  iff  si_target_fields is non-empty
+should_run_external_lookup = true  iff  external_target_fields is non-empty
+
+─── core_status VALUES ────────────────────────────────────────────────────────────────────────
+"complete"                        — all core fields present and extracted
+"complete_with_not_reported_fields" — core fields extracted; some conditions genuinely NR in paper
+"missing_core_fields"             — one or more core fields extractable but absent
+
+─── OUTPUT FORMAT ─────────────────────────────────────────────────────────────────────────────
+Return ONLY valid JSON. No commentary, no markdown, no explanation outside the JSON.
 
 {
-  "is_complete": false,
-  "overall_status": "partially_complete",
-  "missing_or_uncertain_fields": [
-    {
-      "level": "step",
-      "step": 1,
-      "field": "acceptor",
-      "status": "missing",
-      "reason": "The step is classified as glycosylation, but no acceptor was identified.",
-      "recommended_source_to_check": "figure_and_text"
-    },
-    {
-      "level": "step",
-      "step": 2,
-      "field": "temperature",
-      "status": "not_available",
-      "reason": "Temperature was not reported in the provided figure or text.",
-      "recommended_source_to_check": "none"
-    }
-  ],
-  "fields_ready_for_post_processing": [
-    "compound_id",
-    "reaction_type",
-    "product"
-  ],
-  "fields_need_filling": [
-    "compound_name",
-    "reaction_conditions"
-  ],
-  "manual_check_required": true
+  "core_complete": <bool>,
+  "core_status": "<complete|complete_with_not_reported_fields|missing_core_fields>",
+  "missing_core_fields": ["<field>", ...],
+  "fill_target_fields": ["<field>", ...],
+
+  "si_required": <bool>,
+  "si_target_fields": ["<field>", ...],
+
+  "external_lookup_required": <bool>,
+  "external_target_fields": ["<field>", ...],
+
+  "not_reported_fields": ["<field>", ...],
+  "low_confidence_fields": ["<field>", ...],
+
+  "should_run_text_fill": <bool>,
+  "should_run_si_extraction": <bool>,
+  "should_run_external_lookup": <bool>
 }
 ```
 
 ## Input
 
-- Structured JSON output extracted from a reaction scheme
-
-Usually this input comes from:
-
-- `04_Primary Figure-based Extraction`
-- optional related text evidence from `01_Text Organisation`
-- optional compound dictionary from `02_Identifier Dictionary Builder`
+- Structured JSON output extracted from a reaction scheme (from Module 4 / Primary Figure Extraction)
+- Optional: evidence summary from Module 2.01 (text organisation) and Module 2.02 (identifier dictionary)
 
 ## Expected Output
 
-A JSON object that reports whether the extracted scheme output is complete enough for downstream dataset construction.
+A routing JSON that tells the pipeline:
+- Whether core extraction is done (`core_complete`)
+- Which fields Module 6 should try to fill from text (`fill_target_fields`)
+- Which fields the SI extractor should look for (`si_target_fields`)
+- Which fields require external lookup (`external_target_fields`)
+- Which fields are genuinely not reported (`not_reported_fields`)
+- Which fields have low extraction confidence (`low_confidence_fields`)
 
-The output should include:
+## Key Rules
 
-- `is_complete`
-- `overall_status`
-- `missing_or_uncertain_fields`
-- `fields_ready_for_post_processing`
-- `fields_need_filling`
-- `manual_check_required`
+1. **Yield is conditional.** Only put yield in `fill_target_fields` if there is evidence it was
+   reported. If absent, put in `not_reported_fields`. Never block `core_complete` for yield.
 
-## Rules / Notes
+2. **Phase does not block completeness.** Unknown or low-confidence phase goes to
+   `low_confidence_fields` only.
 
-- Check both scheme-level and step-level fields.
-- Scheme-level fields include:
-  - `phase`
-  - `scheme_steps_count`
-  - `reaction_paths`, if the scheme is multi-step or branched
-  - final product or terminal products
-- Step-level fields include:
-  - step number
-  - reaction type
-  - from compound / reactant / predecessor
-  - product
-  - donor, only for glycosylation steps
-  - acceptor, only for glycosylation steps
-  - reaction conditions, if visible or provided in text
-  - yield, if available
-  - stereoselectivity, if available
-- For glycosylation steps, donor and acceptor should be checked.
-- For protection, deprotection, and global deprotection steps, donor and acceptor are not required.
-- If a field is absent because it is not provided in the source, mark it as `not_available`, not as an error.
-- If a field should be present but was missed, mark it as `missing`.
-- If a field is uncertain, mark it as `uncertain`.
-- Do not invent missing information.
-- Recommend where the missing or uncertain field should be checked:
-  - figure
-  - main text
-  - SI
-  - compound dictionary
-  - manual check
-  - none
-- Return only JSON.
+3. **SI and SMILES fields never block `core_complete`.** They have their own routing flags.
 
-## Example JSON
+4. **fill_target_fields drives Module 6.** Only include fields that could plausibly be found in
+   the main text, captions, or figure. Do not include SI or SMILES fields here.
+
+5. **not_reported_fields is not an error list.** It means the paper genuinely did not report
+   these values. The pipeline will mark them as NR in the final output.
+
+## Example Output
 
 ```json
 {
-  "is_complete": false,
-  "overall_status": "partially_complete",
-  "missing_or_uncertain_fields": [
-    {
-      "level": "step",
-      "step": 1,
-      "field": "acceptor",
-      "status": "missing",
-      "reason": "The step is classified as glycosylation, but no acceptor was identified.",
-      "recommended_source_to_check": "figure_and_text"
-    },
-    {
-      "level": "step",
-      "step": 2,
-      "field": "temperature",
-      "status": "not_available",
-      "reason": "Temperature was not reported in the provided figure or text.",
-      "recommended_source_to_check": "none"
-    }
+  "core_complete": true,
+  "core_status": "complete_with_not_reported_fields",
+  "missing_core_fields": [],
+  "fill_target_fields": [],
+
+  "si_required": true,
+  "si_target_fields": [
+    "donor_mass_mg",
+    "donor_mmol",
+    "acceptor_mass_mg",
+    "acceptor_mmol",
+    "product_mass_mg"
   ],
-  "fields_ready_for_post_processing": [
-    "compound_id",
-    "reaction_type",
-    "product"
+
+  "external_lookup_required": true,
+  "external_target_fields": [
+    "donor_smiles",
+    "acceptor_smiles",
+    "product_smiles"
   ],
-  "fields_need_filling": [
-    "compound_name",
-    "reaction_conditions"
+
+  "not_reported_fields": [
+    "yield_percent",
+    "reaction_time"
   ],
-  "manual_check_required": true
+
+  "low_confidence_fields": [
+    "phase"
+  ],
+
+  "should_run_text_fill": false,
+  "should_run_si_extraction": true,
+  "should_run_external_lookup": true
 }
 ```
