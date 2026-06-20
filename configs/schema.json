@@ -1,51 +1,225 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "GlycoReactionRecord",
-  "description": "Structured record for a single glycosylation reaction extracted from a scientific paper.",
+  "title": "autoglyco — Pipeline Object Schemas",
+  "description": "Canonical schemas for the final output and every major intermediate. Use these to validate objects at module boundaries during debugging.",
+
+  "definitions": {
+
+    "field_provenance": {
+      "type": "object",
+      "description": "Per-field provenance record stored under step._provenance.<field>",
+      "required": ["value", "source", "confidence"],
+      "properties": {
+        "value":      { "description": "Extracted value, or null if absent." },
+        "source":     { "type": "string", "enum": ["SI", "figure", "fill", "id_dict", "NR"] },
+        "confidence": { "type": "string", "enum": ["high", "medium", "low", "NR"] },
+        "evidence":   { "type": "string", "description": "Short snippet or explanation." }
+      }
+    },
+
+    "reaction_step": {
+      "type": "object",
+      "description": "One reaction step extracted from a scheme figure.",
+      "required": ["step", "reaction_type"],
+      "properties": {
+        "step":          { "type": ["integer","string"] },
+        "reaction_type": { "type": "string", "enum": ["glycosylation","protection","deprotection","global_deprotection","other","unknown"] },
+        "donor":         { "type": ["string","object","null"] },
+        "acceptor":      { "type": ["string","object","null"] },
+        "product":       { "type": ["string","object","null"] },
+        "solution_conditions": { "type": ["object","null"] },
+        "solid_conditions":    { "type": ["object","null"] },
+        "_provenance":   {
+          "type": "object",
+          "description": "Field-level provenance map. Keys are condition field names.",
+          "additionalProperties": { "$ref": "#/definitions/field_provenance" }
+        }
+      }
+    },
+
+    "id_dict": {
+      "type": "object",
+      "description": "Output of Module 2.02 (run_identifier_dictionary). Maps compound labels to names.",
+      "required": ["resolved", "unresolved"],
+      "properties": {
+        "resolved": {
+          "type": "object",
+          "description": "Successfully resolved compound ID → name mapping.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["compound_id", "compound_name"],
+            "properties": {
+              "compound_id":   { "type": "string" },
+              "compound_name": { "type": "string" },
+              "evidence_text": { "type": "string" },
+              "confidence":    { "type": ["number","string"] },
+              "source":        { "type": "string" }
+            }
+          }
+        },
+        "unresolved": {
+          "type": "object",
+          "description": "Compound IDs mentioned but not paired with a name.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "compound_id":   { "type": "string" },
+              "compound_name": { "type": ["string","null"] },
+              "reason":        { "type": "string" },
+              "evidence_text": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+
+    "figure_extraction": {
+      "type": "object",
+      "description": "Output of Module 3 (run_figure_extraction) for one figure.",
+      "required": ["figure_id", "reaction_paths", "step_analysis"],
+      "properties": {
+        "figure_id":      { "type": "string" },
+        "image_path":     { "type": "string" },
+        "reaction_paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": { "path": { "type": "string" } }
+          }
+        },
+        "step_analysis": {
+          "type": "object",
+          "properties": {
+            "phase":              { "type": "string", "enum": ["solution","solid","mixed","unknown"] },
+            "scheme_steps_count": { "type": "integer" },
+            "reaction_steps":     { "type": "array", "items": { "$ref": "#/definitions/reaction_step" } },
+            "notes":              { "type": "string" }
+          }
+        },
+        "raw_llm_output": { "type": "object" }
+      }
+    },
+
+    "si_data": {
+      "type": "object",
+      "description": "Output of Module 2.04 (run_si_extraction). Maps product_id to experimental quantities.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "donor_id":                     { "type": ["string","null"] },
+          "donor_mass_mg":                { "type": ["number","string","null"] },
+          "donor_mmol":                   { "type": ["number","string","null"] },
+          "donor_smiles":                 { "type": ["string","null"] },
+          "acceptor_id":                  { "type": ["string","null"] },
+          "acceptor_mass_mg":             { "type": ["number","string","null"] },
+          "acceptor_mmol":                { "type": ["number","string","null"] },
+          "acceptor_smiles":              { "type": ["string","null"] },
+          "activator_1_name":             { "type": ["string","null"] },
+          "activator_1_mass_mg":          { "type": ["number","string","null"] },
+          "activator_1_mmol":             { "type": ["number","string","null"] },
+          "activator_2_name":             { "type": ["string","null"] },
+          "activator_2_volume_uL":        { "type": ["number","string","null"] },
+          "activator_2_mmol":             { "type": ["number","string","null"] },
+          "solvent_name":                 { "type": ["string","null"] },
+          "solvent_volume_mL":            { "type": ["number","string","null"] },
+          "temperature_initial_celsius":  { "type": ["number","string","null"] },
+          "temperature_final_celsius":    { "type": ["number","string","null"] },
+          "reaction_time_min":            { "type": ["number","string","null"] },
+          "product_mass_mg":              { "type": ["number","string","null"] },
+          "yield_percent":                { "type": ["number","string","null"] },
+          "a_b_ratio":                    { "type": ["string","null"] },
+          "product_smiles":               { "type": ["string","null"] },
+          "comments":                     { "type": ["string","null"] }
+        }
+      }
+    },
+
+    "merged_scheme": {
+      "type": "object",
+      "description": "Final post-processed scheme — one entry in the _schemes.json output array.",
+      "required": ["figure_id", "final_output"],
+      "properties": {
+        "figure_id": { "type": "string" },
+        "final_output": {
+          "type": "object",
+          "required": ["reaction_steps"],
+          "properties": {
+            "phase":              { "type": "string" },
+            "scheme_steps_count": { "type": "integer" },
+            "reaction_steps": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/reaction_step" }
+            }
+          }
+        },
+        "unresolved_items": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "export_row_solution": {
+      "type": "object",
+      "description": "One row in the solution-phase CSV / Excel output.",
+      "properties": {
+        "DOI":                      { "type": "string" },
+        "Donor_ID":                 { "type": "string" },
+        "Donor_Name":               { "type": "string" },
+        "Donor_SMILES":             { "type": "string" },
+        "Donor_Mass_mg":            { "type": "string" },
+        "Donor_mmol":               { "type": "string" },
+        "Acceptor_ID":              { "type": "string" },
+        "Acceptor_Name":            { "type": "string" },
+        "Acceptor_SMILES":          { "type": "string" },
+        "Acceptor_Mass_mg":         { "type": "string" },
+        "Acceptor_mmol":            { "type": "string" },
+        "Equiv.":                   { "type": "string" },
+        "Activator_1":              { "type": "string" },
+        "Activator_1_Mass_mg":      { "type": "string" },
+        "Activator_1_mmol":         { "type": "string" },
+        "Activator_2":              { "type": "string" },
+        "Activator_2_Volume_uL":    { "type": "string" },
+        "Activator_2_mmol":         { "type": "string" },
+        "Solvent_Name":             { "type": "string" },
+        "Solvent_Volume_mL":        { "type": "string" },
+        "Temperature_1_initial":    { "type": "string" },
+        "Temperature_final_Celsius":{ "type": "string" },
+        "Reaction_Time_min":        { "type": "string" },
+        "Product_ID":               { "type": "string" },
+        "Product_Name":             { "type": "string" },
+        "Product_Mass_mg":          { "type": "string" },
+        "a:b_ratio":                { "type": "string" },
+        "Yield(%)":                 { "type": "string" },
+        "Step":                     { "type": ["string","integer"] },
+        "Comments":                 { "type": "string" },
+        "Confidence":               { "type": "string", "enum": ["high","medium","low"] }
+      }
+    }
+  },
+
+  "$comment": "Top-level schema validates the legacy GlycoReactionRecord (backward compat). Use $ref to definitions above to validate intermediates.",
   "type": "object",
-  "required": [
-    "paper_id", "figure_id", "donor_id", "acceptor_id", "product_id",
-    "completeness_score"
-  ],
+  "required": ["paper_id", "figure_id", "donor_id", "acceptor_id", "product_id", "completeness_score"],
   "properties": {
     "paper_id":              { "type": "string",  "description": "Unique ID of the source paper." },
     "title":                 { "type": "string",  "description": "Paper title." },
     "doi":                   { "type": "string",  "description": "DOI of the paper." },
-    "figure_id":             { "type": "string",  "description": "ID of the figure/scheme from which the reaction was extracted." },
-    "donor_id":              { "type": "string",  "description": "Alphanumeric identifier of the glycosyl donor (e.g. '3a')." },
-    "donor_name":            { "type": "string",  "description": "Chemical name or SMILES of the donor, if resolved." },
-    "acceptor_id":           { "type": "string",  "description": "Alphanumeric identifier of the glycosyl acceptor." },
-    "acceptor_name":         { "type": "string",  "description": "Chemical name or SMILES of the acceptor, if resolved." },
-    "product_id":            { "type": "string",  "description": "Alphanumeric identifier of the glycosylation product." },
-    "product_name":          { "type": "string",  "description": "Chemical name or SMILES of the product, if resolved." },
-    "promoter":              { "type": "string",  "description": "Promoter reagent used (e.g. 'NIS/TfOH'). NR = not reported." },
-    "solvent":               { "type": "string",  "description": "Reaction solvent(s). NR = not reported." },
-    "temperature":           { "type": "string",  "description": "Reaction temperature (e.g. '-20 °C'). NR = not reported." },
-    "time":                  { "type": "string",  "description": "Reaction time (e.g. '2 h'). NR = not reported." },
-    "yield":                 { "type": "string",  "description": "Reported yield (e.g. '78%'). NR = not reported." },
-    "stereochemistry":       { "type": "string",  "description": "Anomeric outcome (e.g. 'alpha', 'beta', 'alpha/beta 1:3'). NR = not reported." },
-    "glycan_or_substrate_notes": { "type": "string", "description": "Free-text notes about the glycan type or substrate." },
-    "procedure_reference":   { "type": "string",  "description": "Reference to the experimental procedure (e.g. 'Procedure B', 'see SI Section 3')." },
-    "supporting_chunks":     {
-      "type": "array",
-      "description": "Text chunks used to populate or verify fields.",
-      "items": { "type": "string" }
-    },
-    "provenance":            {
-      "type": "object",
-      "description": "Maps each field name to the source chunk/location it was extracted from.",
-      "additionalProperties": { "type": "string" }
-    },
-    "completeness_score":    {
-      "type": "number",
-      "minimum": 0.0,
-      "maximum": 1.0,
-      "description": "Fraction of non-NR fields out of all tracked fields."
-    },
-    "unresolved_fields":     {
-      "type": "array",
-      "description": "List of field names that remain NR after all filling steps.",
-      "items": { "type": "string" }
-    }
+    "figure_id":             { "type": "string",  "description": "ID of the figure/scheme." },
+    "donor_id":              { "type": "string",  "description": "Glycosyl donor label." },
+    "donor_name":            { "type": "string" },
+    "acceptor_id":           { "type": "string" },
+    "acceptor_name":         { "type": "string" },
+    "product_id":            { "type": "string" },
+    "product_name":          { "type": "string" },
+    "promoter":              { "type": "string" },
+    "solvent":               { "type": "string" },
+    "temperature":           { "type": "string" },
+    "time":                  { "type": "string" },
+    "yield":                 { "type": "string" },
+    "stereochemistry":       { "type": "string" },
+    "glycan_or_substrate_notes": { "type": "string" },
+    "procedure_reference":   { "type": "string" },
+    "supporting_chunks":     { "type": "array", "items": { "type": "string" } },
+    "provenance":            { "type": "object", "additionalProperties": { "type": "string" } },
+    "completeness_score":    { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "unresolved_fields":     { "type": "array", "items": { "type": "string" } }
   }
 }

@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 _PROMPT_PATH = (
     Path(__file__).parents[2]
     / "configs" / "prompts"
-    / "05_Fill Missing Fields.md"
+    / "05_fill_missing_fields.md"
 )
 
 # ── Regex patterns for the legacy path ───────────────────────────────────────

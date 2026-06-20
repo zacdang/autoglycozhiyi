@@ -33,7 +33,7 @@ logger = get_logger(__name__)
 _PROMPT_PATH = (
     Path(__file__).parents[2]
     / "configs" / "prompts"
-    / "04_Completeness Check.md"
+    / "04_completeness_check.md"
 )
 
 REQUIRED_FIELDS = ["donor_id", "acceptor_id", "product_id"]

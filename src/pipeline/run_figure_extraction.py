@@ -36,7 +36,7 @@ logger = get_logger(__name__)
 _PROMPT_PATH = (
     Path(__file__).parents[2]
     / "configs" / "prompts"
-    / "03_Primary Figure-based Extraction.md"
+    / "03_primary_figure_extraction.md"
 )
 
 
@@ -81,10 +81,9 @@ def run_figure_extraction(
     # Build a richer Module 2 → Module 3 identifier context for the TXT prompt.
     identifier_context = _build_identifier_context(id_dict)
 
-    # ── Parallel extraction: up to 2 concurrent GPT-4o vision calls ──────────
-    # max_workers=2 is intentional — GPT-4o image calls are ~4 k tokens each;
-    # two in parallel stays safely under the 30 k TPM rate limit.
-    MAX_WORKERS = 2
+    # ── Parallel extraction with configurable workers + per-figure retry ──────
+    max_workers = settings.FIGURE_EXTRACTION_WORKERS
+    max_retries = settings.FIGURE_EXTRACTION_MAX_RETRIES
 
     # Pre-build all work items so the executor closure captures no loop variables.
     work_items = []
@@ -97,18 +96,54 @@ def run_figure_extraction(
     results_map: dict = {}   # figure_id → result dict (insertion order preserved after)
 
     def _extract_worker(work_item):
-        fig, fid, img_path, txt_ctx = work_item
+        """Extract one figure with exponential-backoff retry.  Never raises."""
+        import time
+        _, fid, img_path, txt_ctx = work_item
         logger.info(f"[run_figure_extraction] Extracting scheme from {fid} …")
-        extraction = _extract_one_figure(fid, img_path, txt_ctx, prompt_text)
+
+        last_exc = None
+        for attempt in range(max_retries):
+            try:
+                extraction = _extract_one_figure(fid, img_path, txt_ctx, prompt_text)
+                # An empty dict means a soft failure — retry it too
+                if not extraction and attempt < max_retries - 1:
+                    delay = 2 ** attempt
+                    logger.warning(
+                        f"[run_figure_extraction] {fid}: empty result on attempt "
+                        f"{attempt + 1}/{max_retries}, retrying in {delay}s …"
+                    )
+                    time.sleep(delay)
+                    continue
+                return fid, {
+                    "figure_id":      fid,
+                    "image_path":     img_path,
+                    "reaction_paths": extraction.get("reaction_paths", []),
+                    "step_analysis":  extraction.get("step_analysis", {}),
+                    "raw_llm_output": extraction,
+                }
+            except Exception as exc:
+                last_exc = exc
+                delay = 2 ** attempt
+                logger.warning(
+                    f"[run_figure_extraction] {fid}: attempt {attempt + 1}/{max_retries} "
+                    f"failed ({exc}), retrying in {delay}s …"
+                )
+                time.sleep(delay)
+
+        # All retries exhausted — return an isolated empty result, do NOT raise.
+        logger.error(
+            f"[run_figure_extraction] {fid}: all {max_retries} attempt(s) failed "
+            f"— returning empty extraction. Last error: {last_exc}"
+        )
         return fid, {
             "figure_id":      fid,
             "image_path":     img_path,
-            "reaction_paths": extraction.get("reaction_paths", []),
-            "step_analysis":  extraction.get("step_analysis", {}),
-            "raw_llm_output": extraction,
+            "reaction_paths": [],
+            "step_analysis":  {},
+            "raw_llm_output": {},
         }
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_fid = {executor.submit(_extract_worker, item): item[1]
                          for item in work_items}
         for future in as_completed(future_to_fid):
@@ -117,7 +152,9 @@ def run_figure_extraction(
                 fid_result, result_dict = future.result()
                 results_map[fid_result] = result_dict
             except Exception as exc:
-                logger.warning(f"[run_figure_extraction] Worker for {fid} raised: {exc}")
+                # Should never reach here given the try/except inside _extract_worker,
+                # but guard anyway so one figure can never abort the whole run.
+                logger.error(f"[run_figure_extraction] Unexpected error for {fid}: {exc}")
                 results_map[fid] = {
                     "figure_id":      fid,
                     "image_path":     "",
@@ -131,7 +168,8 @@ def run_figure_extraction(
 
     logger.info(
         f"[run_figure_extraction] Extracted {len(results)} scheme(s) from "
-        f"{len(relevant_figures)} relevant figure(s) (parallel workers={MAX_WORKERS})"
+        f"{len(relevant_figures)} relevant figure(s) "
+        f"(workers={max_workers}, max_retries={max_retries})"
     )
     return results
 

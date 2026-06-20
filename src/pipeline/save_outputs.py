@@ -40,7 +40,7 @@ logger = get_logger(__name__)
 _PROMPT_PATH = (
     Path(__file__).parents[2]
     / "configs" / "prompts"
-    / "06_Post-processing & Provenance.md"
+    / "06_postprocessing_provenance.md"
 )
 
 
@@ -88,6 +88,9 @@ def post_process_and_save(
     final_schemes = []
     provenance_summaries = []
 
+    # Build a quick lookup: figure_id → matching scheme_extraction (for SI provenance)
+    scheme_by_fig = {s.get("figure_id"): s for s in scheme_extractions}
+
     for fill_result in fill_results:
         figure_id = fill_result.get("figure_id", "unknown")
         logger.info(f"[post_process_and_save] Post-processing {figure_id} …")
@@ -97,9 +100,14 @@ def post_process_and_save(
         else:
             pp_result = _postprocess_rule_based(fill_result, figure_id)
 
+        # ── Attach field-level provenance to every reaction step ───────────────
+        final_out  = pp_result.get("final_output", {})
+        si_product_data = si_data or {}
+        final_out  = _attach_field_provenance(final_out, fill_result, si_product_data)
+
         final_schemes.append({
             "figure_id":        figure_id,
-            "final_output":     pp_result.get("final_output", {}),
+            "final_output":     final_out,
             "unresolved_items": pp_result.get("unresolved_items", []),
         })
         provenance_summaries.append({
@@ -587,6 +595,98 @@ def export_to_csv(
         logger.info(f"[export_to_csv] {nr_count} NR field(s) flagged for unresolved_fields.csv")
 
     return last_path, unresolved_rows
+
+
+def _attach_field_provenance(
+    final_out: dict,
+    fill_result: dict,
+    si_product_data: dict,
+) -> dict:
+    """
+    Annotate each field in every reaction_step with a provenance sub-dict:
+
+        {
+          "value":      "74%",
+          "source":     "SI" | "figure" | "fill" | "id_dict",
+          "confidence": "high" | "medium" | "low",
+          "evidence":   "short snippet or empty string"
+        }
+
+    The original value is also kept at the top-level key for backward compat.
+    Provenance is stored under a parallel ``_provenance`` key per step so the
+    flat CSV export is unaffected.
+    """
+    CONDITION_KEYS = {
+        "donor_smiles", "donor_mass_mg", "donor_mmol",
+        "acceptor_smiles", "acceptor_mass_mg", "acceptor_mmol",
+        "equivalents", "activator_1_name", "activator_1_mass_mg",
+        "activator_1_mmol", "activator_2_name", "activator_2_volume_uL",
+        "activator_2_mmol", "solvent_name", "solvent_volume_mL",
+        "temperature_initial_celsius", "temperature_final_celsius",
+        "reaction_time_min", "product_mass_mg", "a_b_ratio",
+        "yield_percent", "comments",
+    }
+
+    filled_steps_map: dict = {}
+    filled_out = fill_result.get("filled_output", {})
+    for step in filled_out.get("reaction_steps", []):
+        filled_steps_map[step.get("step")] = step
+
+    steps = final_out.get("reaction_steps", [])
+    annotated_steps = []
+
+    for step in steps:
+        step = dict(step)
+        step_num = step.get("step")
+        prod_id  = step.get("product") if isinstance(step.get("product"), str) else (
+            step.get("product", {}).get("compound_id", "") if isinstance(step.get("product"), dict) else ""
+        )
+        si_entry = si_product_data.get(str(prod_id), {}) or {}
+        cond_key = "solution_conditions" if "solution_conditions" in step else "solid_conditions"
+        cond     = step.get(cond_key) or {}
+        filled_cond = (filled_steps_map.get(step_num) or {}).get(cond_key) or {}
+
+        provenance: dict = {}
+        for field in CONDITION_KEYS:
+            si_val     = si_entry.get(field)
+            fig_val    = cond.get(field)
+            filled_val = filled_cond.get(field)
+
+            if si_val not in (None, "", "null"):
+                provenance[field] = {
+                    "value":      si_val,
+                    "source":     "SI",
+                    "confidence": "high",
+                    "evidence":   f"SI experimental paragraph for compound {prod_id}",
+                }
+            elif fig_val not in (None, "", "null"):
+                provenance[field] = {
+                    "value":      fig_val,
+                    "source":     "figure",
+                    "confidence": "medium",
+                    "evidence":   "extracted from scheme image by Module 3",
+                }
+            elif filled_val not in (None, "", "null"):
+                provenance[field] = {
+                    "value":      filled_val,
+                    "source":     "fill",
+                    "confidence": "low",
+                    "evidence":   "inferred by Module 6 fill pass from text chunks",
+                }
+            else:
+                provenance[field] = {
+                    "value":      None,
+                    "source":     "NR",
+                    "confidence": "NR",
+                    "evidence":   "",
+                }
+
+        step["_provenance"] = provenance
+        annotated_steps.append(step)
+
+    final_out = dict(final_out)
+    final_out["reaction_steps"] = annotated_steps
+    return final_out
 
 
 def _collect_unresolved(

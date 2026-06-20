@@ -26,7 +26,7 @@ logger = get_logger(__name__)
 _PROMPT_PATH = (
     Path(__file__).parents[2]
     / "configs" / "prompts"
-    / "02_03_Synthesis-related Figure Check.md"
+    / "02_03_figure_relevance.md"
 )
 
 CONFIDENCE_THRESHOLD = 0.3

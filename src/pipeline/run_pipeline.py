@@ -41,10 +41,15 @@ from src.pipeline.retrieve_supporting_chunks import retrieve_supporting_chunks
 from src.pipeline.run_si_extraction          import run_si_extraction
 from src.pipeline.save_outputs               import post_process_and_save, save_outputs
 from src.utils.logging_utils                 import get_logger
+from src.utils.schema_utils                  import log_validation
 
 logger = get_logger(__name__)
 
 MAX_ITERATIONS = 2
+
+# Prompt files used for cache-key derivation (keyed to the modules that cache).
+_ID_DICT_PROMPT  = Path(__file__).parents[2] / "configs" / "prompts" / "02_02_si_dictionary.md"
+_SI_DATA_PROMPT  = Path(__file__).parents[2] / "configs" / "prompts" / "02_04_si_experimental.md"
 
 
 def run_pipeline(paper: Paper) -> tuple:
@@ -57,6 +62,15 @@ def run_pipeline(paper: Paper) -> tuple:
     where scheme_results is a list of final per-scheme dicts.
     """
     logger.info(f"=== Starting pipeline for {paper.paper_id} ===")
+
+    # ── Resolve per-paper run directories ─────────────────────────────────────
+    from configs import settings as _s
+    dirs = _s.run_dirs(paper.paper_id)
+    intermediate_dir = dirs["intermediate"]
+    output_dir       = dirs["outputs"]
+    logger.info(
+        f"Run dirs → intermediate: {intermediate_dir} | outputs: {output_dir}"
+    )
 
     # ── 1. Shared Input Layer ─────────────────────────────────────────────────
     documents = load_documents(paper)
@@ -73,18 +87,22 @@ def run_pipeline(paper: Paper) -> tuple:
     # ── 3 branches (A + B run in serial; C is mermaid_output) ────────────────
     text_org = run_text_organisation(documents)
 
-    # Load id_dict from cache if available (saves ~5 min of chunked API calls)
+    # Load id_dict from cache if available (saves ~5 min of chunked API calls).
+    # Cache key includes PDF hash + prompt hash + model so stale caches auto-bust.
     from src.utils.json_utils import load_json, save_json
-    from configs import settings as _s
-    id_dict_cache_path = Path(_s.INTERMEDIATE_DIR) / f"{paper.paper_id}_id_dict.json"
+    pdf_path = Path(paper.pdf_path) if hasattr(paper, "pdf_path") and paper.pdf_path else Path("__missing__")
+    _id_key  = _s.cache_key(paper.paper_id, pdf_path, _ID_DICT_PROMPT)
+    id_dict_cache_path = intermediate_dir / f"{paper.paper_id}_id_dict_{_id_key}.json"
     if id_dict_cache_path.exists():
         id_dict = load_json(id_dict_cache_path)
         logger.info(
-            f"ID dict loaded from cache → {id_dict_cache_path} "
+            f"ID dict loaded from cache [{_id_key}] → {id_dict_cache_path} "
             f"({len(id_dict.get('resolved', {}))} resolved)"
         )
     else:
         id_dict = run_identifier_dictionary(documents, text_org)
+
+    log_validation(id_dict, "id_dict", context="Module 2.02")
 
     # ── 4. Figure Relevance Decision ──────────────────────────────────────────
     unified          = merge_extractions(mermaid_output, text_org)
@@ -115,11 +133,17 @@ def run_pipeline(paper: Paper) -> tuple:
             id_dict              = id_dict,
             doi                  = paper.doi or "",
             si_data              = {},
+            output_dir           = output_dir,
+            intermediate_dir     = intermediate_dir,
         )
         return [], saved_paths
 
     # ── 5. Primary Figure Extraction [Module 4] ───────────────────────────────
     scheme_extractions = run_figure_extraction(relevant_figures, text_org, id_dict)
+
+    # Validate each figure extraction against schema
+    for se in scheme_extractions:
+        log_validation(se, "figure_extraction", context=f"Module 3/{se.get('figure_id','?')}")
 
     # ── 6. Completeness Check + Fill Missing Fields loop [Modules 5 + 6] ─────
     completeness_reports = []
@@ -159,23 +183,25 @@ def run_pipeline(paper: Paper) -> tuple:
     # Reads SI text (if available) to fill masses, mmol, volumes, SMILES
     # for each product compound. Results merged into CSV rows by save_outputs.
     from src.utils.json_utils import save_json, load_json
-    from configs import settings as _s
-    si_data_path = Path(_s.INTERMEDIATE_DIR) / f"{paper.paper_id}_si_data.json"
+    si_pdf_path = Path(paper.si_path) if hasattr(paper, "si_path") and paper.si_path else Path("__missing__")
+    _si_key     = _s.cache_key(paper.paper_id, si_pdf_path, _SI_DATA_PROMPT)
+    si_data_path = intermediate_dir / f"{paper.paper_id}_si_data_{_si_key}.json"
 
     if si_data_path.exists():
         si_data = load_json(si_data_path)
-        logger.info(f"SI data loaded from cache → {si_data_path} ({len(si_data)} compounds)")
+        logger.info(f"SI data loaded from cache [{_si_key}] → {si_data_path} ({len(si_data)} compounds)")
     else:
         si_data = run_si_extraction(documents, scheme_extractions)
         if si_data:
             save_json(si_data, si_data_path)
             logger.info(f"SI data saved → {si_data_path}")
 
-    # Save resolved id_dict for quick re-runs / testing
-    if id_dict.get("resolved"):
-        id_dict_path = Path(_s.INTERMEDIATE_DIR) / f"{paper.paper_id}_id_dict.json"
-        save_json(id_dict, id_dict_path)
-        logger.info(f"ID dict saved → {id_dict_path}")
+    log_validation(si_data, "si_data", context="Module 2.04")
+
+    # Save resolved id_dict (keyed cache file — auto-busts on prompt/PDF changes)
+    if id_dict.get("resolved") and not id_dict_cache_path.exists():
+        save_json(id_dict, id_dict_cache_path)
+        logger.info(f"ID dict saved → {id_dict_cache_path}")
 
     # ── 7b. Post-processing & Provenance [Module 7] ───────────────────────────
     saved_paths = post_process_and_save(
@@ -187,6 +213,8 @@ def run_pipeline(paper: Paper) -> tuple:
         id_dict              = id_dict,
         doi                  = paper.doi or "",
         si_data              = si_data,
+        output_dir           = output_dir,
+        intermediate_dir     = intermediate_dir,
     )
 
     logger.info(
